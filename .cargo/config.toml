@@ -1,0 +1,5 @@
+[env]
+# Debug builds of the clap-derived `Commands` parser need more than the 2 MiB default stack of a
+# test thread once every Go filter is merged in (`tests::test_bun_build_parses_to_arg_vector`
+# overflows). The rtk binary parses on its 8 MiB main thread, so only `cargo test` needs this.
+RUST_MIN_STACK = "8388608"

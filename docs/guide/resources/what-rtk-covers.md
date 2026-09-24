@@ -81,6 +81,10 @@ Every percentage below measures **bash output bytes removed** — the only thing
 | `go test` | 80-90% | Failures only |
 | `golangci-lint run` | 75% | Violations grouped by file |
 | `go build` | 75% | Errors only |
+| `go mod graph` | 80% | Counts, direct requirements, version conflicts |
+| `go mod tidy` | 95% | Download chatter dropped; go.mod changes listed |
+| `go list` | 65-77% | Shared module path once; `-m -u all` direct updates only |
+| `go generate` | 60% | Success collapses to ok; failures keep the tail |
 
 ## Ruby
 

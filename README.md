@@ -234,6 +234,8 @@ rtk cargo build                 # Cargo build (-80%)
 rtk cargo clippy                # Cargo clippy (-80%)
 rtk ruff check                  # Python linting (JSON, -80%)
 rtk golangci-lint run           # Go linting (JSON, -85%)
+rtk go mod graph                # Module graph summary: direct deps, version conflicts
+rtk go list -m -u all           # Only direct modules with available updates
 rtk rubocop                     # Ruby linting (JSON, -60%+)
 rtk mvnd verify                 # Maven Daemon (same filters as rtk mvn)
 rtk sbt test                    # ScalaTest output (-90%)

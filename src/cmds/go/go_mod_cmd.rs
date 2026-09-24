@@ -260,6 +260,8 @@ struct TidyReport {
     changed: usize,
     downloads: usize,
     kept: Vec<String>,
+    /// go.mod could not be read before or after the run, so the diff is unknown.
+    unknown: bool,
 }
 
 impl TidyReport {
@@ -283,6 +285,7 @@ fn tidy_report(before: Option<&[Require]>, after: Option<&[Require]>, output: &s
         changed: 0,
         downloads: 0,
         kept: Vec::new(),
+        unknown: before.is_none() || after.is_none(),
     };
     for line in output.lines().filter(|l| !l.trim().is_empty()) {
         if is_tidy_chatter(line) {
@@ -341,10 +344,15 @@ fn tidy_header(report: &TidyReport) -> Option<String> {
             "go mod tidy: +{} added, -{} removed, ~{} changed{downloads}",
             report.added, report.removed, report.changed
         ))
-    } else if report.downloads > 0 {
-        Some(format!("go mod tidy: no changes{downloads}"))
-    } else {
+    } else if report.downloads == 0 {
         None
+    } else if report.unknown {
+        // Never "no changes" when rtk could not see go.mod: that would state what it does not know.
+        Some(format!(
+            "go mod tidy: changes unknown, go.mod not readable{downloads}"
+        ))
+    } else {
+        Some(format!("go mod tidy: no changes{downloads}"))
     }
 }
 
@@ -430,6 +438,9 @@ fn run_tidy(
         .and_then(|p| std::fs::read_to_string(p).ok());
     let before = before_text.as_deref().map(parse_requires);
     let after = after_text.as_deref().map(parse_requires);
+    if before.is_none() || after.is_none() {
+        eprintln!("rtk: go.mod not readable, cannot report what tidy changed");
+    }
     let mut report = tidy_report(before.as_deref(), after.as_deref(), &raw);
     if let (Some(old), Some(new)) = (&before_text, &after_text) {
         report.add_directive_changes(directive_changes(old, new));
@@ -732,13 +743,17 @@ direct (2):
     }
 
     #[test]
-    fn tidy_without_go_mod_only_counts_downloads() {
-        let raw = "go: downloading a.io/x v1.0.0\ngo: downloading b.io/y v1.0.0\n";
-        let report = tidy_report(None, None, raw);
+    fn tidy_without_a_readable_go_mod_never_claims_no_changes() {
+        let raw: String = (0..10)
+            .map(|i| format!("go: downloading m{i}.io/x v1.0.0\n"))
+            .collect();
+        let report = tidy_report(None, None, &raw);
         assert_eq!(
-            emit_tidy(&report, raw),
-            "go mod tidy: no changes (2 modules downloaded)"
+            emit_tidy(&report, &raw),
+            "go mod tidy: changes unknown, go.mod not readable (10 modules downloaded)"
         );
+        // Nothing downloaded and nothing known: silent, like go.
+        assert_eq!(emit_tidy(&tidy_report(None, None, ""), ""), "");
     }
 
     #[test]
@@ -795,7 +810,8 @@ go mod tidy: +1 added, -1 removed, ~1 changed
     #[test]
     fn tidy_cold_fixture() {
         let input = include_str!("../../../tests/fixtures/go_mod_tidy_cold_raw.txt");
-        let report = tidy_report(None, None, input);
+        // A cold cache with an unchanged, readable go.mod.
+        let report = tidy_report(Some(&[][..]), Some(&[][..]), input);
         let out = emit_tidy(&report, input);
         assert!(out.starts_with("go mod tidy: no changes ("), "{out}");
         assert_savings("go mod tidy (cold)", input, &out);

@@ -59,8 +59,6 @@ fn takes_value(_kind: TokenKind, name: &str) -> Option<ValueSpec> {
 fn passes_through(args: &[String]) -> bool {
     let flags = go_flags(args, &takes_value);
     let t = &flags.tokens;
-    // `flag_value` rather than `has_flag`: both flags take a value, and `wants_help` already
-    // pulls `has_flag` in, so every Go flag helper is used.
     wants_help(t)
         || flag_value(t, "f").is_some()
         || flag_value(t, "explain").is_some()

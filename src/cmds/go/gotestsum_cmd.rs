@@ -195,13 +195,20 @@ fn cleanup_jsonfile(path: &Path, created_by_rtk: bool, verbose: u8) {
     if !created_by_rtk {
         return;
     }
+    match removal_warning(path) {
+        Some(warning) => eprintln!("{warning}"),
+        None if verbose > 0 => eprintln!("rtk gotestsum: removed {}", path.display()),
+        None => {}
+    }
+}
+
+/// Removes the file; the warning to print when that fails. A file that is already gone (the run
+/// never wrote it, or the filter removed it) is not a failure.
+fn removal_warning(path: &Path) -> Option<String> {
     match std::fs::remove_file(path) {
-        Ok(()) if verbose > 0 => eprintln!("rtk gotestsum: removed {}", path.display()),
-        Ok(()) => {}
-        Err(e) if verbose > 0 => {
-            eprintln!("rtk gotestsum: could not remove {}: {e}", path.display())
-        }
-        Err(_) => {}
+        Ok(()) => None,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => Some(format!("rtk: could not remove {}: {e}", path.display())),
     }
 }
 
@@ -220,8 +227,8 @@ fn take_events(path: &Path, created_by_rtk: bool, before: Option<FileStamp>) -> 
         return None;
     }
     let events = std::fs::read_to_string(path).ok()?;
-    if created_by_rtk {
-        let _ = std::fs::remove_file(path);
+    if created_by_rtk && let Some(warning) = removal_warning(path) {
+        eprintln!("{warning}");
     }
     Some(events)
 }
@@ -285,9 +292,7 @@ pub(crate) fn run_with(bin: ToolBin, args: &[String], verbose: u8) -> Result<i32
         runner::RunOptions::with_tee(TOOL),
     );
     // A failed spawn never reaches the filter; remove a file it might have left.
-    if path.exists() {
-        cleanup_jsonfile(&path, created_by_rtk, verbose);
-    }
+    cleanup_jsonfile(&path, created_by_rtk, verbose);
     result
 }
 
@@ -411,6 +416,21 @@ mod tests {
         assert!(!ours.exists());
         assert!(theirs.exists());
         std::fs::remove_file(&theirs).expect("remove");
+    }
+
+    #[test]
+    fn only_real_removal_failures_are_reported() {
+        let missing = temp_jsonfile();
+        assert_eq!(removal_warning(&missing), None);
+        let dir = temp_jsonfile();
+        std::fs::create_dir(&dir).expect("mkdir");
+        let warning = removal_warning(&dir).expect("a directory cannot be removed as a file");
+        assert!(warning.starts_with("rtk: could not remove "), "{warning}");
+        std::fs::remove_dir(&dir).expect("rmdir");
+        let file = temp_jsonfile();
+        std::fs::write(&file, "{}").expect("write");
+        assert_eq!(removal_warning(&file), None);
+        assert!(!file.exists());
     }
 
     #[test]

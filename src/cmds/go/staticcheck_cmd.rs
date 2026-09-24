@@ -12,7 +12,7 @@ use crate::core::truncate::{self, CAP_ERRORS, CAP_WARNINGS};
 use anyhow::Result;
 use serde::Deserialize;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const TOOL: &str = "staticcheck";
 const MAX_CHECKS: usize = CAP_ERRORS;
@@ -84,7 +84,10 @@ pub(crate) fn run_with(bin: ToolBin, args: &[String], verbose: u8) -> Result<i32
     // JSON is the only format with one finding per line and a stable shape. Go's flag package
     // reads flags only before the first package argument, so it goes first.
     cmd.args(["-f", "json"]).args(args);
-    let base = std::env::current_dir().unwrap_or_default();
+    let dirs = working_dirs(
+        std::env::current_dir().ok(),
+        std::env::var_os("PWD").map(PathBuf::from),
+    );
     let tool_name = bin.tool_name(TOOL);
     if verbose > 0 {
         eprintln!("Running: {tool_name} -f json {}", args.join(" "));
@@ -103,7 +106,8 @@ pub(crate) fn run_with(bin: ToolBin, args: &[String], verbose: u8) -> Result<i32
                 }
                 return output.to_string();
             }
-            let filtered = render(&report, &base, true);
+            let bases: Vec<&Path> = dirs.iter().map(PathBuf::as_path).collect();
+            let filtered = render(&report, &bases, true);
             if verbose > 0 {
                 eprintln!(
                     "rtk staticcheck: {} findings, {} lines out",
@@ -112,7 +116,7 @@ pub(crate) fn run_with(bin: ToolBin, args: &[String], verbose: u8) -> Result<i32
                 );
             }
             append_hint(output, filtered, exit_code, || {
-                tee::force_tee_hint(&render(&report, &base, false), TOOL)
+                tee::force_tee_hint(&render(&report, &bases, false), TOOL)
             })
         },
         runner::RunOptions::stdout_only().tee(TOOL),
@@ -130,7 +134,7 @@ fn parse(output: &str) -> Report {
     report
 }
 
-fn render(report: &Report, base: &Path, capped: bool) -> String {
+fn render(report: &Report, bases: &[&Path], capped: bool) -> String {
     let mut groups: Vec<(&str, Vec<&Finding>)> = Vec::new();
     for finding in &report.findings {
         match groups.iter_mut().find(|(code, _)| *code == finding.code) {
@@ -162,7 +166,7 @@ fn render(report: &Report, base: &Path, capped: bool) -> String {
     for (code, members) in groups.iter().take(max_checks) {
         out.push(format!("{code} ({}x)", members.len()));
         for finding in members.iter().take(max_locations) {
-            out.extend(finding_lines(finding, base));
+            out.extend(finding_lines(finding, bases));
         }
         if members.len() > max_locations {
             out.push(format!("  … +{} more", members.len() - max_locations));
@@ -178,7 +182,7 @@ fn render(report: &Report, base: &Path, capped: bool) -> String {
     out.join("\n")
 }
 
-fn finding_lines(finding: &Finding, base: &Path) -> Vec<String> {
+fn finding_lines(finding: &Finding, bases: &[&Path]) -> Vec<String> {
     // Compile errors have no location; their message holds the compiler's own lines.
     if finding.location.file.is_empty() {
         return finding
@@ -190,16 +194,29 @@ fn finding_lines(finding: &Finding, base: &Path) -> Vec<String> {
     let first = finding.message.lines().next().unwrap_or("").trim_end();
     vec![format!(
         "  {}:{} {first}",
-        relative(&finding.location.file, base),
+        relative(&finding.location.file, bases),
         finding.location.line
     )]
 }
 
-fn relative(file: &str, base: &Path) -> String {
-    Path::new(file)
-        .strip_prefix(base)
+/// Every spelling of the working directory staticcheck may print paths under: `getcwd`
+/// resolves symlinks (`/var` → `/private/var` on macOS) while Go's `os.Getwd` keeps `$PWD`.
+fn working_dirs(cwd: Option<PathBuf>, pwd: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = cwd.into_iter().collect();
+    if let Some(pwd) = pwd.filter(|p| p.is_absolute())
+        && !dirs.contains(&pwd)
+    {
+        dirs.push(pwd);
+    }
+    dirs
+}
+
+fn relative(file: &str, bases: &[&Path]) -> String {
+    bases
+        .iter()
+        .find_map(|base| Path::new(file).strip_prefix(base).ok())
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| file.to_string())
+        .unwrap_or_else(|| file.to_string())
 }
 
 fn plural(n: usize, word: &str) -> String {
@@ -250,7 +267,7 @@ mod tests {
 
     #[test]
     fn groups_by_check_with_most_frequent_first() {
-        let out = render(&parse(GRPC), Path::new(BASE), true);
+        let out = render(&parse(GRPC), &[Path::new(BASE)], true);
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines[0], "staticcheck: 120 findings in 64 files (3 checks)");
         let headers: Vec<&str> = lines
@@ -278,7 +295,7 @@ mod tests {
 
     #[test]
     fn uncapped_rendering_keeps_every_finding() {
-        let out = render(&parse(GRPC), Path::new(BASE), false);
+        let out = render(&parse(GRPC), &[Path::new(BASE)], false);
         assert_eq!(out.lines().count(), 1 + 3 + 120);
         assert!(!out.contains("… +"));
     }
@@ -286,10 +303,10 @@ mod tests {
     #[test]
     fn compile_errors_lead_and_keep_their_message() {
         let mixed = format!("{GRPC}{COMPILE}");
-        let out = render(&parse(&mixed), Path::new(BASE), true);
+        let out = render(&parse(&mixed), &[Path::new(BASE)], true);
         assert_eq!(out.lines().nth(1), Some("compile (1x)"), "{out}");
         assert_eq!(
-            render(&parse(COMPILE), Path::new(BASE), true),
+            render(&parse(COMPILE), &[Path::new(BASE)], true),
             "staticcheck: 1 finding in 0 files (1 check)\n\
              compile (1x)\n\
              \x20 # scp\n\
@@ -299,8 +316,36 @@ mod tests {
 
     #[test]
     fn paths_outside_base_stay_absolute() {
-        let out = render(&parse(GRPC), Path::new("/somewhere/else"), true);
+        let out = render(&parse(GRPC), &[Path::new("/somewhere/else")], true);
         assert!(out.contains("  /tmp/rtk-fixture/grpc-go/authz/rbac_translator.go:143 "));
+    }
+
+    #[test]
+    fn both_spellings_of_the_working_directory_are_bases() {
+        // macOS: getcwd resolves /var to /private/var, Go's os.Getwd keeps $PWD's /var.
+        let dirs = working_dirs(
+            Some(PathBuf::from("/private/var/x/grpc-go")),
+            Some(PathBuf::from("/var/x/grpc-go")),
+        );
+        assert_eq!(
+            dirs,
+            [
+                PathBuf::from("/private/var/x/grpc-go"),
+                PathBuf::from("/var/x/grpc-go")
+            ]
+        );
+        let same = working_dirs(Some(PathBuf::from("/a")), Some(PathBuf::from("/a")));
+        assert_eq!(same, [PathBuf::from("/a")]);
+        assert_eq!(
+            working_dirs(None, Some(PathBuf::from("rel"))),
+            Vec::<PathBuf>::new()
+        );
+        let bases: Vec<&Path> = [
+            Path::new("/private/tmp/rtk-fixture/grpc-go"),
+            Path::new(BASE),
+        ]
+        .to_vec();
+        assert!(render(&parse(GRPC), &bases, true).contains("\n  authz/rbac_translator.go:143 "));
     }
 
     #[test]
@@ -309,7 +354,7 @@ mod tests {
         let report = parse(&input);
         assert_eq!(report.unparsed, ["go: downloading example.com/x v1.0.0"]);
         assert!(
-            render(&report, Path::new(BASE), true)
+            render(&report, &[Path::new(BASE)], true)
                 .ends_with("unparsed:\n  go: downloading example.com/x v1.0.0")
         );
     }
@@ -329,7 +374,7 @@ mod tests {
         assert_savings(
             "staticcheck grpc",
             GRPC,
-            &render(&parse(GRPC), Path::new(BASE), true),
+            &render(&parse(GRPC), &[Path::new(BASE)], true),
         );
     }
 }

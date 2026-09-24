@@ -5,4 +5,5 @@ pub mod go_cmd;
 pub mod go_run;
 pub mod go_tool;
 pub mod golangci_cmd;
+pub mod govulncheck_cmd;
 pub mod staticcheck_cmd;

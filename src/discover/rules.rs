@@ -590,6 +590,26 @@ pub const RULES: &[RtkRule] = &[
         savings_pct: 90.0,
         ..RtkRule::DEFAULT
     },
+    RtkRule {
+        pattern: r"^govulncheck(?:\s|$)",
+        rtk_cmd: "rtk govulncheck",
+        pipeline_safety: PipelineSafety::ProducerOnly,
+        rewrite_prefixes: &["govulncheck"],
+        category: "Go",
+        savings_pct: 90.0,
+        ..RtkRule::DEFAULT
+    },
+    // The second prefix is read only by `exclude_commands` peeling, so a `"govulncheck"`
+    // entry also covers this spelling; the pattern keeps bare `govulncheck` out.
+    RtkRule {
+        pattern: r"^go\s+tool\s+govulncheck(?:\s|$)",
+        rtk_cmd: "rtk go tool govulncheck",
+        pipeline_safety: PipelineSafety::ProducerOnly,
+        rewrite_prefixes: &["go tool govulncheck", "govulncheck"],
+        category: "Go",
+        savings_pct: 90.0,
+        ..RtkRule::DEFAULT
+    },
     // Scala/SBT
     RtkRule {
         pattern: r#"^sbt\s+["']?(testOnly|testQuick|test|compile|run|clean|assembly|package)(?:[\s"']|$)"#,

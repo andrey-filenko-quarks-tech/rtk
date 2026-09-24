@@ -1538,10 +1538,11 @@ fn pipeline_command_is_safe(rtk_cmd: &str, cmd: &str) -> bool {
 }
 
 fn go_prints_data(cmd: &str) -> bool {
-    let words: Vec<&str> = cmd
-        .split_whitespace()
+    let words: Vec<String> = shell_split(cmd)
+        .into_iter()
         .skip_while(|w| w.contains('='))
         .collect();
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
     matches!(words.as_slice(), [_, "list", ..] | [_, "mod", "graph", ..])
 }
 
@@ -5309,6 +5310,16 @@ mod tests {
             );
         }
         assert_eq!(rewrite_command_no_prefixes("go mod why x", &[]), None);
+    }
+
+    #[test]
+    fn test_go_data_commands_stay_raw_behind_a_quoted_env_prefix() {
+        let rewritten =
+            rewrite_command_no_prefixes("FOO=\"a b\" go list ./... | grep internal", &[]);
+        assert!(
+            rewritten.as_deref().is_none_or(|r| !r.contains("rtk go")),
+            "{rewritten:?}"
+        );
     }
 
     #[test]

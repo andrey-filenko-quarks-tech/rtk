@@ -21,11 +21,12 @@ const MAX_TIDY_CHANGES: usize = CAP_LIST;
 const TIDY_TEE_LABEL: &str = "go-mod-tidy";
 
 fn graph_takes_value(kind: TokenKind, name: &str) -> Option<ValueSpec> {
-    (kind == TokenKind::Long && matches!(name, "C" | "modfile" | "go")).then(ValueSpec::value)
+    (kind == TokenKind::Long && matches!(name, "C" | "modfile" | "go" | "overlay"))
+        .then(ValueSpec::value)
 }
 
 fn tidy_takes_value(kind: TokenKind, name: &str) -> Option<ValueSpec> {
-    (kind == TokenKind::Long && matches!(name, "C" | "modfile" | "go" | "compat"))
+    (kind == TokenKind::Long && matches!(name, "C" | "modfile" | "go" | "compat" | "overlay"))
         .then(ValueSpec::value)
 }
 
@@ -94,6 +95,11 @@ fn run_graph(args: &[String], verbose: u8) -> Result<i32> {
                 eprintln!("{stdout}");
             }
             let filtered = filter_go_mod_graph(stdout);
+            if verbose > 0 && filtered == stdout && !stdout.trim().is_empty() {
+                eprintln!("rtk: filter warning: go mod graph output not recognised, shown as is");
+            }
+            // Recall stores the raw graph, not the capped rows: the summary drops every edge,
+            // and those are what a reader recovers the output for.
             append_hint(stdout, filtered, exit_code, || {
                 tee::force_tee_hint(stdout, GRAPH_TEE_LABEL)
             })
@@ -153,27 +159,47 @@ fn push_capped(out: &mut String, lines: &[String]) {
     }
 }
 
-/// Summarise `go mod graph`: module and edge counts, the main module's direct requirements with
-/// their transitive fan-out, and modules required at more than one version.
-fn filter_go_mod_graph(stdout: &str) -> String {
-    // An edge is exactly `from to@version`; anything else means output this filter does not
-    // understand, which is returned as is.
-    let Some(edges) = stdout
+/// Edges of `go mod graph`, `None` when a line is not `from to@version` (output this filter does
+/// not understand). `go@…` / `toolchain@…` targets record Go version requirements, not modules.
+fn parse_graph_edges(stdout: &str) -> Option<Vec<(&str, &str)>> {
+    let edges = stdout
         .lines()
         .filter(|l| !l.trim().is_empty())
         .map(|l| {
             l.split_once(' ')
                 .filter(|(_, to)| to.contains('@') && !to.contains(' '))
         })
-        .collect::<Option<Vec<(&str, &str)>>>()
-    else {
+        .collect::<Option<Vec<(&str, &str)>>>()?;
+    Some(
+        edges
+            .into_iter()
+            .filter(|(_, to)| !to.starts_with("go@") && !to.starts_with("toolchain@"))
+            .collect(),
+    )
+}
+
+/// The main modules' direct requirements with their transitive fan-out, most fan-out first.
+fn direct_requirements<'a>(
+    mains: &[&'a str],
+    adjacency: &HashMap<&'a str, Vec<&'a str>>,
+) -> Vec<(&'a str, usize)> {
+    let mut direct: Vec<(&str, usize)> = mains
+        .iter()
+        .filter_map(|m| adjacency.get(m))
+        .flatten()
+        .map(|d| (*d, transitive_count(adjacency, d)))
+        .collect();
+    direct.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    direct.dedup_by(|a, b| a.0 == b.0);
+    direct
+}
+
+/// Summarise `go mod graph`: module and edge counts, the main module's direct requirements with
+/// their transitive fan-out, and modules required at more than one version.
+fn filter_go_mod_graph(stdout: &str) -> String {
+    let Some(edges) = parse_graph_edges(stdout) else {
         return stdout.to_string();
     };
-    // `go@1.25.0` / `toolchain@go1.25.1` record Go version requirements, not modules.
-    let edges: Vec<(&str, &str)> = edges
-        .into_iter()
-        .filter(|(_, to)| !to.starts_with("go@") && !to.starts_with("toolchain@"))
-        .collect();
     // Main modules are the unversioned sources: one normally, several in a workspace.
     let mut mains: Vec<&str> = Vec::new();
     for (from, _) in &edges {
@@ -191,14 +217,7 @@ fn filter_go_mod_graph(stdout: &str) -> String {
         nodes.insert(from);
         nodes.insert(to);
     }
-    let mut direct: Vec<(&str, usize)> = mains
-        .iter()
-        .filter_map(|m| adjacency.get(m))
-        .flatten()
-        .map(|d| (*d, transitive_count(&adjacency, d)))
-        .collect();
-    direct.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-    direct.dedup_by(|a, b| a.0 == b.0);
+    let direct = direct_requirements(&mains, &adjacency);
     let conflicts = version_conflicts(&edges);
 
     let others = match mains.len() - 1 {
@@ -409,7 +428,35 @@ fn with_failure_hint(body: String, hint: Option<String>, raw: &str) -> String {
     }
 }
 
+/// Tidy runs outside the runner helpers because its diff is exempt from `never_worse`. Like
+/// `runner::run`, it re-raises a relayed signal on every path, error included.
 fn run_tidy(
+    args: &[String],
+    chdir: Option<&str>,
+    modfile: Option<&str>,
+    verbose: u8,
+) -> Result<i32> {
+    let result = run_tidy_inner(args, chdir, modfile, verbose);
+    stream::die_by_relayed_signal();
+    result
+}
+
+/// The stdout summary plus its recovery hint: the raw output's tee on failure (kept only while
+/// it fits), or the full change list when the shown one was capped.
+fn tidy_stdout(report: &TidyReport, raw: &str, exit_code: i32) -> String {
+    let body = emit_tidy(report, raw);
+    if exit_code != 0 {
+        return with_failure_hint(body, tee::tee_and_hint(raw, TIDY_TEE_LABEL, exit_code), raw);
+    }
+    match tidy_tail_hint(report, |content, offset| {
+        tee::force_tee_tail_hint(content, TIDY_TEE_LABEL, offset)
+    }) {
+        Some(hint) => format!("{body}\n{hint}"),
+        None => body,
+    }
+}
+
+fn run_tidy_inner(
     args: &[String],
     chdir: Option<&str>,
     modfile: Option<&str>,
@@ -426,7 +473,7 @@ fn run_tidy(
         eprintln!("Running: go mod {}", args.join(" "));
     }
     // `run_streaming` relays SIGINT/SIGTERM to `go`, so a killed rtk never leaves tidy writing
-    // go.mod on its own; the relayed signal is re-raised on the way out.
+    // go.mod on its own.
     let captured = stream::run_streaming(&mut cmd, StdinMode::Null, FilterMode::CaptureOnly)
         .context("Failed to run go mod tidy")?;
     let raw = format!("{}{}", captured.raw_stdout, captured.raw_stderr);
@@ -445,21 +492,7 @@ fn run_tidy(
     if let (Some(old), Some(new)) = (&before_text, &after_text) {
         report.add_directive_changes(directive_changes(old, new));
     }
-    let body = emit_tidy(&report, &raw);
-    let shown = if captured.exit_code != 0 {
-        with_failure_hint(
-            body,
-            tee::tee_and_hint(&raw, TIDY_TEE_LABEL, captured.exit_code),
-            &raw,
-        )
-    } else {
-        match tidy_tail_hint(&report, |content, offset| {
-            tee::force_tee_tail_hint(content, TIDY_TEE_LABEL, offset)
-        }) {
-            Some(hint) => format!("{body}\n{hint}"),
-            None => body,
-        }
-    };
+    let shown = tidy_stdout(&report, &raw, captured.exit_code);
     if !shown.is_empty() {
         println!("{shown}");
     }
@@ -474,7 +507,6 @@ fn run_tidy(
         &raw,
         &format!("{shown}{kept}"),
     );
-    stream::die_by_relayed_signal();
     Ok(captured.exit_code)
 }
 
@@ -705,6 +737,21 @@ go mod tidy: +1 added, -1 removed, ~2 changed (1 modules downloaded)
             hint
         );
         assert_eq!(with_failure_hint("sum".into(), None, &raw), "sum");
+    }
+
+    #[test]
+    fn overlay_takes_a_value_for_tidy_and_graph() {
+        assert_eq!(
+            classify(&s(&["tidy", "-overlay", "ov.json"])),
+            ModInvocation::Tidy {
+                chdir: None,
+                modfile: None
+            }
+        );
+        assert_eq!(
+            classify(&s(&["graph", "-overlay", "ov.json"])),
+            ModInvocation::Graph
+        );
     }
 
     #[test]

@@ -54,11 +54,6 @@ enum ListInvocation {
     Passthrough,
 }
 
-#[cfg(test)]
-fn classify(args: &[String]) -> ListInvocation {
-    classify_flags(args, &go_flags(args, &list_takes_value))
-}
-
 fn classify_flags(args: &[String], flags: &GoFlags<'_>) -> ListInvocation {
     let tokens = &flags.tokens;
     if wants_help(tokens)
@@ -135,35 +130,37 @@ fn run_filtered_list(
             if verbose > 1 {
                 eprintln!("{stdout}");
             }
-            match invocation {
-                ListInvocation::Packages => {
-                    let (filtered, all) = filter_packages(stdout);
-                    append_hint(stdout, filtered, exit_code, || {
-                        (all.len() > MAX_PACKAGES + 1)
-                            .then(|| {
-                                tee::force_tee_tail_hint(
-                                    &all.join("\n"),
-                                    LIST_TEE_LABEL,
-                                    1 + MAX_PACKAGES + 1,
-                                )
-                            })
-                            .flatten()
-                    })
-                }
+            let (filtered, all_packages) = match invocation {
+                ListInvocation::Packages => filter_packages(stdout),
                 ListInvocation::ModulesAll => {
-                    let filtered = filter_modules_all(stdout, requires.as_deref());
-                    append_hint(stdout, filtered, exit_code, || {
-                        tee::force_tee_hint(stdout, LIST_TEE_LABEL)
-                    })
+                    (filter_modules_all(stdout, requires.as_deref()), Vec::new())
                 }
-                ListInvocation::ModulesUpdates => {
-                    let filtered = filter_modules_updates(stdout, requires.as_deref());
-                    append_hint(stdout, filtered, exit_code, || {
-                        tee::force_tee_hint(stdout, LIST_TEE_LABEL)
-                    })
-                }
-                ListInvocation::Passthrough => stdout.to_string(),
+                ListInvocation::ModulesUpdates => (
+                    filter_modules_updates(stdout, requires.as_deref()),
+                    Vec::new(),
+                ),
+                ListInvocation::Passthrough => (stdout.to_string(), Vec::new()),
+            };
+            if verbose > 0 && filtered == stdout && !stdout.trim().is_empty() {
+                eprintln!("rtk: filter warning: go list output not recognised, shown as is");
             }
+            append_hint(stdout, filtered, exit_code, || {
+                if invocation == ListInvocation::Packages {
+                    // A package list is shown as formatted rows: recall returns the hidden tail.
+                    return (all_packages.len() > MAX_PACKAGES + 1)
+                        .then(|| {
+                            tee::force_tee_tail_hint(
+                                &all_packages.join("\n"),
+                                LIST_TEE_LABEL,
+                                1 + MAX_PACKAGES + 1,
+                            )
+                        })
+                        .flatten();
+                }
+                // Module views hide more than the cap (indirect modules on purpose), so recall
+                // stores the raw list rather than a tail of the shown rows.
+                tee::force_tee_hint(stdout, LIST_TEE_LABEL)
+            })
         },
         runner::RunOptions::stdout_only().tee(LIST_TEE_LABEL),
     )
@@ -273,38 +270,15 @@ fn filter_modules_updates(stdout: &str, requires: Option<&[Require]>) -> String 
     // Indirect modules flagged only by a marker: not listed, but never silently dropped.
     let mut hidden_flagged = 0;
     let mut rows: Vec<String> = Vec::new();
-    for line in &modules {
-        let words: Vec<&str> = line.split_whitespace().collect();
-        let [path, version, rest @ ..] = words.as_slice() else {
-            continue;
-        };
-        let newer = rest
-            .iter()
-            .find_map(|w| w.strip_prefix('[').and_then(|w| w.strip_suffix(']')));
-        let markers: Vec<&str> = rest
-            .iter()
-            .copied()
-            .filter(|w| w.starts_with('('))
-            .collect();
-        if newer.is_none() && markers.is_empty() {
-            continue;
+    for flagged in modules.iter().filter_map(|line| FlaggedModule::parse(line)) {
+        let listed = direct.as_ref().is_none_or(|d| d.contains(flagged.path));
+        updates += usize::from(flagged.newer.is_some());
+        direct_updates += usize::from(flagged.newer.is_some() && listed);
+        if listed {
+            rows.push(flagged.render());
+        } else {
+            hidden_flagged += usize::from(flagged.newer.is_none());
         }
-        let listed = direct.as_ref().is_none_or(|d| d.contains(path));
-        updates += usize::from(newer.is_some());
-        direct_updates += usize::from(newer.is_some() && listed);
-        if !listed {
-            hidden_flagged += usize::from(newer.is_none());
-            continue;
-        }
-        let mut row = match newer {
-            Some(newer) => format!("{path} {version} → {newer}"),
-            None => format!("{path} {version}"),
-        };
-        for marker in markers {
-            row.push(' ');
-            row.push_str(marker);
-        }
-        rows.push(row);
     }
     if updates == 0 && rows.is_empty() && hidden_flagged == 0 {
         return format!(
@@ -336,10 +310,58 @@ fn filter_modules_updates(stdout: &str, requires: Option<&[Require]>) -> String 
     out.join("\n")
 }
 
+/// A `go list -m -u all` line with an available update (`[vX]`) or a `(retracted)` /
+/// `(deprecated)` marker.
+struct FlaggedModule<'a> {
+    path: &'a str,
+    version: &'a str,
+    newer: Option<&'a str>,
+    markers: Vec<&'a str>,
+}
+
+impl<'a> FlaggedModule<'a> {
+    fn parse(line: &'a str) -> Option<Self> {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let [path, version, rest @ ..] = words.as_slice() else {
+            return None;
+        };
+        let newer = rest
+            .iter()
+            .find_map(|w| w.strip_prefix('[').and_then(|w| w.strip_suffix(']')));
+        let markers: Vec<&str> = rest
+            .iter()
+            .copied()
+            .filter(|w| w.starts_with('('))
+            .collect();
+        (newer.is_some() || !markers.is_empty()).then_some(Self {
+            path,
+            version,
+            newer,
+            markers,
+        })
+    }
+
+    fn render(&self) -> String {
+        let mut row = match self.newer {
+            Some(newer) => format!("{} {} → {newer}", self.path, self.version),
+            None => format!("{} {}", self.path, self.version),
+        };
+        for marker in &self.markers {
+            row.push(' ');
+            row.push_str(marker);
+        }
+        row
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cmds::go::go_run::test_support::{assert_savings, s};
+
+    fn classify(args: &[String]) -> ListInvocation {
+        classify_flags(args, &go_flags(args, &list_takes_value))
+    }
 
     #[test]
     fn explicit_false_turns_a_boolean_flag_off() {

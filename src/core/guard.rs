@@ -11,13 +11,11 @@
 //! the ceiling sat under the message's own floor and dropped it on 90% of
 //! one-line pairs.
 //!
-//! `rtk go mod tidy` is the second, for the same kind of reason: it reports what
-//! tidy changed in `go.mod`, which tidy itself never prints (a warm-cache run
-//! emits nothing), so the guard's premise — raw output holds the information —
-//! does not apply. The exception covers only the stdout summary with its change
-//! list, capped at `CAP_LIST` lines. A summary without changes is guarded, a
-//! failure's recall hint is kept only while it fits under the raw size, and Go's
-//! own messages are forwarded unchanged on stderr (a subset of the raw output).
+//! The second is a report of what a command changed on disk when the command
+//! prints nothing about it, so the guard's premise — the raw output holds the
+//! information — does not apply. It is bounded to a capped change list; every
+//! other part of that output stays guarded. Its one caller, `rtk go mod tidy`,
+//! documents the case in `src/cmds/go/README.md`.
 
 use crate::core::tracking::estimate_tokens;
 

@@ -563,8 +563,11 @@ pub const RULES: &[RtkRule] = &[
             ("build", 80.0),
             ("vet", 75.0),
             ("list", 65.0),
+            // Cold-cache download chatter; a warm run that changed go.mod emits more than
+            // tidy's empty output (the guard-exempt change list), so its own figure is negative.
             ("mod tidy", 95.0),
             ("mod graph", 80.0),
+            // Successful generator logs; a short failure is shown whole.
             ("generate", 65.0),
         ],
         ..RtkRule::DEFAULT

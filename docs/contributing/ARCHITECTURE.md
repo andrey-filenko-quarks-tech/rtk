@@ -463,11 +463,31 @@ golangci_cmd.rs   JSON PARSING          JSON API          85%
     }
     → Group by linter rule, count violations
     → Format: "errcheck: 12 issues, gosec: 5 issues"
+
+go_mod_cmd.rs     TEXT PARSING          Edge list / diff   80-95%
+
+  go mod graph: "from to@version" edges
+    → Counts, direct requirements with transitive fan-out, multi-version modules
+  go mod tidy:  go.mod read before and after the run
+    → "+/-/~" change list (the capped, guard-exempt report); download chatter counted
+
+go_list_cmd.rs    TEXT PARSING          Package / module   65-77%
+
+  go list ./...:        shared module path printed once, relative paths
+  go list -m (-u) all:  direct requirements from go.mod; indirect counted
+  -f / -json / -e:      passthrough (machine-shaped output)
+
+go_generate_cmd.rs TEXT FILTERING       Combined stream    65-99%
+
+  success → "go generate: ok"; failure → tail with Go's `running "…"` verdict
+
+Helpers (no command of their own): go_args.rs (Go flag rules), go_modfile.rs (go.mod,
+-C/-modfile/GOFLAGS, workspaces), go_run.rs (passthrough, recall hint).
 ```
 
 #### Sub-Enum Pattern (go_cmd.rs)
 
-Uses `Commands::Go { #[command(subcommand)] command: GoCommand }` in main.rs, with `GoCommand` enum routing to `run_test/run_build/run_vet` in go_cmd.rs and to go_mod_cmd / go_list_cmd / go_generate_cmd. Mirrors git/cargo patterns.
+Uses `Commands::Go { #[command(subcommand)] command: GoCommands }` in main.rs, with `GoCommands` enum routing to `run_test/run_build/run_vet` in go_cmd.rs and to go_mod_cmd / go_list_cmd / go_generate_cmd. Mirrors git/cargo patterns.
 
 **Why Sub-Enum?**
 - `go test/build/vet` are semantically related (core Go toolchain)

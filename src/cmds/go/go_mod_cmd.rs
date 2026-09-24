@@ -1,8 +1,10 @@
 //! Filters `go mod` output: `graph` summarised to direct requirements and version
-//! conflicts, `tidy` reported as a `go.mod` diff. Also hosts the Go flag and `go.mod` helpers
-//! shared by the other Go subcommand modules.
+//! conflicts, `tidy` reported as a `go.mod` diff.
 
-use crate::core::arg_tokenizer::{self, Dialect, Token, TokenKind, ValueSpec};
+use crate::cmds::go::go_args::{GoFlags, bool_flag, flag_value, go_flags, wants_help};
+use crate::cmds::go::go_modfile::{Require, parse_requires, resolve_go_mod};
+use crate::cmds::go::go_run::{append_hint, run_go_passthrough};
+use crate::core::arg_tokenizer::{TokenKind, ValueSpec};
 use crate::core::guard::never_worse;
 use crate::core::runner;
 use crate::core::stream::{self, FilterMode, StdinMode};
@@ -12,105 +14,11 @@ use crate::core::truncate::CAP_LIST;
 use crate::core::utils::resolved_command;
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::ffi::OsString;
-use std::path::{Path, PathBuf};
 
 const MAX_GRAPH_ITEMS: usize = CAP_LIST;
 const GRAPH_TEE_LABEL: &str = "go-mod-graph";
 const MAX_TIDY_CHANGES: usize = CAP_LIST;
 const TIDY_TEE_LABEL: &str = "go-mod-tidy";
-
-/// Tokens Go's `flag` package would parse, and the index of the first argument it would not.
-pub(crate) struct GoFlags<'a> {
-    pub tokens: Vec<Token<'a>>,
-    pub rest: usize,
-}
-
-/// Go's `flag` package takes atomic single-dash names (`-modfile`), and stops at `--` or at the
-/// first non-flag argument. `Msbuild` gives atomic names; a `/abs/path` argument, which it reads
-/// as a `/flag`, is a positional to Go.
-pub(crate) fn go_flags<'a>(
-    args: &'a [String],
-    takes_value: &dyn Fn(TokenKind, &str) -> Option<ValueSpec>,
-) -> GoFlags<'a> {
-    let tokens = arg_tokenizer::tokenize_grammar(args, takes_value, Dialect::Msbuild);
-    let mut own = Vec::new();
-    for token in tokens {
-        if token.kind == TokenKind::DashDash {
-            return GoFlags {
-                tokens: own,
-                rest: token.source_index + 1,
-            };
-        }
-        if token.slash || token.is_free_positional() {
-            return GoFlags {
-                tokens: own,
-                rest: token.source_index,
-            };
-        }
-        own.push(token);
-    }
-    GoFlags {
-        tokens: own,
-        rest: args.len(),
-    }
-}
-
-// Exact comparison: `Msbuild`'s own matching ignores case, and Go's `-C` is not `-c`.
-pub(crate) fn has_flag(tokens: &[Token<'_>], name: &str) -> bool {
-    tokens
-        .iter()
-        .any(|t| t.kind == TokenKind::Long && t.text == name)
-}
-
-pub(crate) fn flag_value<'a>(tokens: &[Token<'a>], name: &str) -> Option<&'a str> {
-    tokens
-        .iter()
-        .find(|t| t.kind == TokenKind::Long && t.text == name)
-        .and_then(|t| t.value(tokens))
-}
-
-/// A boolean Go flag is on unless its last occurrence carries a false value (`-diff=false`),
-/// as `strconv.ParseBool` reads it.
-pub(crate) fn bool_flag(tokens: &[Token<'_>], name: &str) -> bool {
-    tokens
-        .iter()
-        .rfind(|t| t.kind == TokenKind::Long && t.text == name)
-        .is_some_and(|t| {
-            !matches!(
-                t.attached,
-                Some("0" | "f" | "F" | "false" | "FALSE" | "False")
-            )
-        })
-}
-
-pub(crate) fn wants_help(tokens: &[Token<'_>]) -> bool {
-    has_flag(tokens, "h") || has_flag(tokens, "help")
-}
-
-/// On exit 0 a summarised output carries its own recovery hint; on failure the runner's tee
-/// stores the raw output. Skipped when `never_worse` would print the raw output anyway.
-pub(crate) fn append_hint(
-    raw: &str,
-    filtered: String,
-    exit_code: i32,
-    store: impl FnOnce() -> Option<String>,
-) -> String {
-    if exit_code != 0 || filtered == raw || never_worse(raw, &filtered) == raw {
-        return filtered;
-    }
-    match store() {
-        Some(hint) => format!("{filtered}\n{hint}"),
-        None => filtered,
-    }
-}
-
-pub(crate) fn run_go_passthrough(sub: &str, args: &[String], verbose: u8) -> Result<i32> {
-    let os_args: Vec<OsString> = std::iter::once(OsString::from(sub))
-        .chain(args.iter().map(OsString::from))
-        .collect();
-    runner::run_passthrough("go", &os_args, verbose)
-}
 
 fn graph_takes_value(kind: TokenKind, name: &str) -> Option<ValueSpec> {
     (kind == TokenKind::Long && matches!(name, "C" | "modfile" | "go")).then(ValueSpec::value)
@@ -318,96 +226,6 @@ fn filter_go_mod_graph(stdout: &str) -> String {
         push_capped(&mut out, &conflict_lines);
     }
     out.trim_end().to_string()
-}
-
-pub(crate) struct Require {
-    pub path: String,
-    pub version: String,
-    pub indirect: bool,
-}
-
-fn parse_require_line(line: &str) -> Option<Require> {
-    let (spec, comment) = match line.split_once("//") {
-        Some((spec, comment)) => (spec, Some(comment.trim())),
-        None => (line, None),
-    };
-    let mut parts = spec.split_whitespace();
-    let path = parts.next()?;
-    let version = parts.next()?;
-    Some(Require {
-        path: path.to_string(),
-        version: version.to_string(),
-        indirect: comment.is_some_and(|c| c == "indirect" || c.starts_with("indirect;")),
-    })
-}
-
-/// `require` directives, block and single-line form; everything else is ignored.
-pub(crate) fn parse_requires(go_mod: &str) -> Vec<Require> {
-    let mut requires = Vec::new();
-    let mut in_block = false;
-    for line in go_mod.lines().map(str::trim) {
-        if in_block {
-            if line.starts_with(')') {
-                in_block = false;
-            } else {
-                requires.extend(parse_require_line(line));
-            }
-            continue;
-        }
-        let Some(rest) = line.strip_prefix("require") else {
-            continue;
-        };
-        if rest.starts_with([' ', '\t', '(']) && rest.trim_start().starts_with('(') {
-            in_block = true;
-        } else if rest.starts_with([' ', '\t']) {
-            requires.extend(parse_require_line(rest));
-        }
-    }
-    requires
-}
-
-/// Nearest `go.mod` walking up from `start`, as `go` itself resolves the main module.
-pub(crate) fn find_go_mod(start: &Path) -> Option<PathBuf> {
-    start
-        .ancestors()
-        .map(|dir| dir.join("go.mod"))
-        .find(|p| p.is_file())
-}
-
-/// The `go.mod` a command run with `-C chdir` / `-modfile modfile` works on.
-pub(crate) fn resolve_go_mod(chdir: Option<&str>, modfile: Option<&str>) -> Option<PathBuf> {
-    resolve_go_mod_from(&std::env::current_dir().ok()?, chdir, modfile)
-}
-
-/// `-C` is applied first (relative to `cwd`, or absolute), then `-modfile` relative to it.
-fn resolve_go_mod_from(cwd: &Path, chdir: Option<&str>, modfile: Option<&str>) -> Option<PathBuf> {
-    let base = chdir.map_or_else(|| cwd.to_path_buf(), |dir| cwd.join(dir));
-    match modfile {
-        Some(file) => Some(base.join(file)),
-        None => find_go_mod(&base),
-    }
-}
-
-pub(crate) fn read_requires(path: &Path) -> Option<Vec<Require>> {
-    std::fs::read_to_string(path)
-        .ok()
-        .map(|text| parse_requires(&text))
-}
-
-/// Workspace mode: `GOWORK` names a file, or (unless `GOWORK=off`) a `go.work` sits above.
-pub(crate) fn in_workspace(chdir: Option<&str>) -> bool {
-    std::env::current_dir().is_ok_and(|cwd| {
-        let base = chdir.map_or_else(|| cwd.clone(), |dir| cwd.join(dir));
-        in_workspace_with(std::env::var("GOWORK").ok().as_deref(), &base)
-    })
-}
-
-fn in_workspace_with(gowork: Option<&str>, base: &Path) -> bool {
-    match gowork {
-        Some("off") => false,
-        Some(path) if !path.is_empty() => true,
-        _ => base.ancestors().any(|dir| dir.join("go.work").is_file()),
-    }
 }
 
 /// A single-line directive's value (`go 1.22`, `toolchain go1.23.1`).
@@ -650,65 +468,9 @@ fn run_tidy(
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
-
-    pub(crate) fn s(args: &[&str]) -> Vec<String> {
-        args.iter().map(|a| a.to_string()).collect()
-    }
-
-    pub(crate) fn count_tokens(text: &str) -> usize {
-        text.split_whitespace().count()
-    }
-
-    pub(crate) fn assert_savings(name: &str, input: &str, output: &str) {
-        let savings = 100.0 - (count_tokens(output) as f64 / count_tokens(input) as f64 * 100.0);
-        eprintln!("{name}: {savings:.1}% bash output reduction");
-        assert!(
-            savings >= 60.0,
-            "{name}: expected >=60% reduction, got {savings:.1}%"
-        );
-    }
-
-    fn graph_values(kind: TokenKind, name: &str) -> Option<ValueSpec> {
-        graph_takes_value(kind, name)
-    }
-
-    #[test]
-    fn go_flags_keeps_single_dash_names_whole() {
-        let args = s(&["-modfile=tools/go.mod", "-C", "sub", "-x"]);
-        let flags = go_flags(&args, &graph_values);
-        assert!(has_flag(&flags.tokens, "modfile"));
-        assert!(has_flag(&flags.tokens, "C"));
-        assert!(has_flag(&flags.tokens, "x"));
-        assert!(!has_flag(&flags.tokens, "m"));
-        // `-C`'s value is consumed, not a free positional.
-        assert_eq!(flags.rest, 4);
-    }
-
-    #[test]
-    fn go_flags_stops_at_the_first_positional_and_dashdash() {
-        let args = s(&["-x", "./...", "-json"]);
-        let flags = go_flags(&args, &graph_values);
-        assert_eq!(flags.rest, 1);
-        assert!(!has_flag(&flags.tokens, "json"));
-        let args = s(&["-x", "--", "-json"]);
-        assert_eq!(go_flags(&args, &graph_values).rest, 2);
-    }
-
-    #[test]
-    fn go_flags_treats_an_absolute_path_as_a_positional() {
-        let args = s(&["/abs/dir/...", "-x"]);
-        let flags = go_flags(&args, &graph_values);
-        assert_eq!(flags.rest, 0);
-        assert!(flags.tokens.is_empty());
-    }
-
-    #[test]
-    fn flag_names_are_case_sensitive() {
-        let args = s(&["-c"]);
-        assert!(!has_flag(&go_flags(&args, &graph_values).tokens, "C"));
-    }
+    use crate::cmds::go::go_run::test_support::{assert_savings, s};
 
     #[test]
     fn classifies_mod_subcommands() {
@@ -782,22 +544,6 @@ a.io/x@v1.0.0 go@1.21
     }
 
     #[test]
-    fn append_hint_only_on_a_smaller_summary_at_exit_zero() {
-        let raw = "a b c d e f g h i j k l m n o p q r s t u v w x y z\n".repeat(5);
-        let hinted = append_hint(&raw, "sum".into(), 0, || {
-            Some("[full output: rtk recall x]".into())
-        });
-        assert_eq!(hinted, "sum\n[full output: rtk recall x]");
-        let never = || -> Option<String> { panic!("nothing should be stored") };
-        assert_eq!(append_hint(&raw, "sum".into(), 1, never), "sum");
-        assert_eq!(
-            append_hint("a", "a much longer summary".into(), 0, never),
-            "a much longer summary"
-        );
-        assert_eq!(append_hint(&raw, raw.clone(), 0, never), raw);
-    }
-
-    #[test]
     fn graph_fixture() {
         let input = include_str!("../../../tests/fixtures/go_mod_graph_raw.txt");
         let out = filter_go_mod_graph(input);
@@ -854,15 +600,6 @@ multiple versions (40):
     }
 
     #[test]
-    fn flag_values_are_read() {
-        let args = s(&["-modfile=tools/go.mod", "-C", "sub"]);
-        let flags = go_flags(&args, &tidy_takes_value);
-        assert_eq!(flag_value(&flags.tokens, "modfile"), Some("tools/go.mod"));
-        assert_eq!(flag_value(&flags.tokens, "C"), Some("sub"));
-        assert_eq!(flag_value(&flags.tokens, "go"), None);
-    }
-
-    #[test]
     fn classifies_tidy() {
         assert_eq!(
             classify(&s(&["tidy"])),
@@ -887,46 +624,6 @@ multiple versions (40):
         );
         assert_eq!(classify(&s(&["tidy", "-diff"])), ModInvocation::Passthrough);
         assert_eq!(classify(&s(&["tidy", "extra"])), ModInvocation::Passthrough);
-    }
-
-    #[test]
-    fn parses_block_and_single_line_requires() {
-        let go_mod = "\
-module example.com/m
-
-require a.io/x v1.0.0
-
-require (
-\tb.io/y v2.0.0 // indirect
-\tc.io/z v0.1.0 // some note
-)
-
-replace a.io/x => ../x
-exclude d.io/w v1.0.0
-requirements.io/nope v1
-";
-        let got: Vec<(String, String, bool)> = parse_requires(go_mod)
-            .into_iter()
-            .map(|r| (r.path, r.version, r.indirect))
-            .collect();
-        assert_eq!(
-            got,
-            vec![
-                ("a.io/x".into(), "v1.0.0".into(), false),
-                ("b.io/y".into(), "v2.0.0".into(), true),
-                ("c.io/z".into(), "v0.1.0".into(), false),
-            ]
-        );
-    }
-
-    #[test]
-    fn finds_go_mod_walking_up() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("go.mod"), "module m\n").expect("write");
-        let deep = dir.path().join("a/b");
-        std::fs::create_dir_all(&deep).expect("mkdir");
-        assert_eq!(find_go_mod(&deep), Some(dir.path().join("go.mod")));
-        assert_eq!(find_go_mod(std::path::Path::new("/")), None);
     }
 
     fn req(path: &str, version: &str, indirect: bool) -> Require {
@@ -1000,15 +697,7 @@ go mod tidy: +1 added, -1 removed, ~2 changed (1 modules downloaded)
     }
 
     #[test]
-    fn boolean_flags_honour_an_explicit_false() {
-        let args = s(&["-diff=false", "-e"]);
-        let tokens = go_flags(&args, &tidy_takes_value).tokens;
-        assert!(!bool_flag(&tokens, "diff"));
-        assert!(bool_flag(&tokens, "e"));
-        let args = s(&["-e=true", "-x=0"]);
-        let tokens = go_flags(&args, &tidy_takes_value).tokens;
-        assert!(bool_flag(&tokens, "e"));
-        assert!(!bool_flag(&tokens, "x"));
+    fn tidy_diff_false_is_filtered() {
         assert_eq!(
             classify(&s(&["tidy", "-diff=false"])),
             ModInvocation::Tidy {
@@ -1033,46 +722,6 @@ direct (2):
   x.io/p@v1.0.0 (+1 transitive)
   y.io/q@v1.0.0 (+0 transitive)"
         );
-    }
-
-    #[test]
-    fn resolves_go_mod_from_chdir_and_modfile() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("go.mod"), "module m\n").expect("write");
-        std::fs::create_dir_all(dir.path().join("sub")).expect("mkdir");
-        let cwd = dir.path();
-        assert_eq!(
-            resolve_go_mod_from(cwd, Some("sub"), None),
-            Some(cwd.join("go.mod"))
-        );
-        assert_eq!(
-            resolve_go_mod_from(cwd, Some("sub"), Some("tools.mod")),
-            Some(cwd.join("sub/tools.mod"))
-        );
-        assert_eq!(
-            resolve_go_mod_from(cwd, Some("/abs/elsewhere"), Some("x.mod")),
-            Some(std::path::PathBuf::from("/abs/elsewhere/x.mod"))
-        );
-    }
-
-    #[test]
-    fn workspace_detection_follows_gowork() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let base = dir.path();
-        assert!(!in_workspace_with(None, base));
-        assert!(!in_workspace_with(Some("off"), base));
-        assert!(in_workspace_with(Some("/some/go.work"), base));
-        std::fs::write(base.join("go.work"), "go 1.22\n").expect("write");
-        assert!(in_workspace_with(None, &base.join("a/b")));
-        assert!(!in_workspace_with(Some("off"), base));
-    }
-
-    #[test]
-    fn chdir_with_an_absolute_path_is_a_flag_value() {
-        let args = s(&["-C", "/abs/dir", "-x"]);
-        let flags = go_flags(&args, &graph_values);
-        assert_eq!(flag_value(&flags.tokens, "C"), Some("/abs/dir"));
-        assert_eq!(flags.rest, 3);
     }
 
     #[test]

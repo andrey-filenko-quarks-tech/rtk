@@ -2,7 +2,8 @@
 //! generator's last lines and Go's own `running "…"` verdict. Generators such as mockery log on
 //! stderr, so the filter reads the combined stream.
 
-use crate::cmds::go::go_mod_cmd::{self, append_hint, bool_flag, go_flags, wants_help};
+use crate::cmds::go::go_args::{bool_flag, go_flags, wants_help};
+use crate::cmds::go::go_run::{append_hint, run_go_passthrough};
 use crate::core::arg_tokenizer::{TokenKind, ValueSpec};
 use crate::core::runner;
 use crate::core::tee;
@@ -38,7 +39,7 @@ fn filters(args: &[String]) -> bool {
 pub fn run(args: &[String], verbose: u8) -> Result<i32> {
     let args = crate::core::args_utils::restore_double_dash(args);
     if !filters(&args) {
-        return go_mod_cmd::run_go_passthrough("generate", &args, verbose);
+        return run_go_passthrough("generate", &args, verbose);
     }
     let mut cmd = resolved_command("go");
     cmd.arg("generate").args(&args);
@@ -82,7 +83,7 @@ fn filter_go_generate(output: &str, exit_code: i32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cmds::go::go_mod_cmd::tests::{assert_savings, s};
+    use crate::cmds::go::go_run::test_support::{assert_savings, s};
 
     #[test]
     fn classifies_generate() {

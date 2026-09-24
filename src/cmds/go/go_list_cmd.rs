@@ -1,9 +1,9 @@
 //! Filters `go list`: package lists print the shared module path once, `-m all` shows direct
 //! requirements, `-m -u all` shows only modules with updates. Machine-shaped forms pass through.
 
-use crate::cmds::go::go_mod_cmd::{
-    self, GoFlags, Require, append_hint, bool_flag, flag_value, go_flags, has_flag, wants_help,
-};
+use crate::cmds::go::go_args::{GoFlags, bool_flag, flag_value, go_flags, has_flag, wants_help};
+use crate::cmds::go::go_modfile::{self, Require};
+use crate::cmds::go::go_run::{append_hint, run_go_passthrough};
 use crate::core::arg_tokenizer::{TokenKind, ValueSpec};
 use crate::core::runner;
 use crate::core::tee;
@@ -82,18 +82,23 @@ pub fn run(args: &[String], verbose: u8) -> Result<i32> {
     let chdir = flag_value(&flags.tokens, "C");
     let modfile = flag_value(&flags.tokens, "modfile");
     match classify_flags(&args, &flags) {
-        ListInvocation::Passthrough => go_mod_cmd::run_go_passthrough("list", &args, verbose),
-        // Several main modules: the direct/indirect split has no single go.mod to read.
-        ListInvocation::ModulesAll if go_mod_cmd::in_workspace(chdir) => {
-            go_mod_cmd::run_go_passthrough("list", &args, verbose)
+        ListInvocation::Passthrough => run_go_passthrough("list", &args, verbose),
+        // Package lists never read go.mod or look for a workspace.
+        ListInvocation::Packages => {
+            run_filtered_list(&args, ListInvocation::Packages, None, verbose)
         }
-        invocation => {
-            let requires = requires_for(&invocation, go_mod_cmd::in_workspace(chdir), || {
-                go_mod_cmd::resolve_go_mod(chdir, modfile)
+        modules => {
+            let workspace = go_modfile::in_workspace(chdir);
+            // Several main modules: the direct/indirect split has no single go.mod to read.
+            if workspace && modules == ListInvocation::ModulesAll {
+                return run_go_passthrough("list", &args, verbose);
+            }
+            let requires = requires_for(&modules, workspace, || {
+                go_modfile::resolve_go_mod(chdir, modfile)
                     .as_deref()
-                    .and_then(go_mod_cmd::read_requires)
+                    .and_then(go_modfile::read_requires)
             });
-            run_filtered_list(&args, invocation, requires, verbose)
+            run_filtered_list(&args, modules, requires, verbose)
         }
     }
 }
@@ -334,7 +339,7 @@ fn filter_modules_updates(stdout: &str, requires: Option<&[Require]>) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cmds::go::go_mod_cmd::tests::{assert_savings, s};
+    use crate::cmds::go::go_run::test_support::{assert_savings, s};
 
     #[test]
     fn explicit_false_turns_a_boolean_flag_off() {
@@ -510,7 +515,7 @@ go list -m -u all: 2 of 4 modules have updates
     fn modules_all_fixture() {
         let input = include_str!("../../../tests/fixtures/go_list_m_all_raw.txt");
         let requires =
-            go_mod_cmd::parse_requires(include_str!("../../../tests/fixtures/go_list_go.mod"));
+            go_modfile::parse_requires(include_str!("../../../tests/fixtures/go_list_go.mod"));
         let out = filter_modules_all(input, Some(requires.as_slice()));
         assert!(out.starts_with("go list -m all: "), "{out}");
         assert_savings("go list -m all", input, &out);
@@ -520,7 +525,7 @@ go list -m -u all: 2 of 4 modules have updates
     fn modules_updates_fixture() {
         let input = include_str!("../../../tests/fixtures/go_list_m_u_all_raw.txt");
         let requires =
-            go_mod_cmd::parse_requires(include_str!("../../../tests/fixtures/go_list_go.mod"));
+            go_modfile::parse_requires(include_str!("../../../tests/fixtures/go_list_go.mod"));
         let out = filter_modules_updates(input, Some(requires.as_slice()));
         assert_eq!(
             out,

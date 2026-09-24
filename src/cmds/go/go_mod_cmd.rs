@@ -367,6 +367,18 @@ pub(crate) fn read_requires(path: &Path) -> Option<Vec<Require>> {
         .map(|text| parse_requires(&text))
 }
 
+/// Workspace mode: `GOWORK` names a file, or (unless `GOWORK=off`) a `go.work` sits above.
+pub(crate) fn in_workspace(chdir: Option<&str>) -> bool {
+    match std::env::var("GOWORK").ok().as_deref() {
+        Some("off") => false,
+        Some(path) if !path.is_empty() => true,
+        _ => std::env::current_dir().is_ok_and(|cwd| {
+            let base = chdir.map_or_else(|| cwd.clone(), |dir| cwd.join(dir));
+            base.ancestors().any(|dir| dir.join("go.work").is_file())
+        }),
+    }
+}
+
 struct TidyReport {
     changes: Vec<String>,
     added: usize,
@@ -535,7 +547,7 @@ fn run_tidy(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     pub(crate) fn s(args: &[&str]) -> Vec<String> {

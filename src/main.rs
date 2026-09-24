@@ -11,7 +11,8 @@ use cmds::cloud::{aws_cmd, container, curl_cmd, psql_cmd, wget_cmd};
 use cmds::dotnet::{binlog, dotnet_cmd, dotnet_format_report, dotnet_trx};
 use cmds::git::{diff_cmd, gh_cmd, git_cmd, glab_cmd, gt_cmd};
 use cmds::go::{
-    go_cmd, golangci_cmd, goreleaser_cmd, gotestsum_cmd, govulncheck_cmd, staticcheck_cmd,
+    go_cmd, gofmt_cmd, golangci_cmd, goreleaser_cmd, gotestsum_cmd, govulncheck_cmd,
+    staticcheck_cmd,
 };
 use cmds::js::{
     bun_cmd, deno_cmd, lint_cmd, next_cmd, npm_cmd, playwright_cmd, pnpm_cmd, prettier_cmd,
@@ -916,6 +917,22 @@ enum Commands {
     #[command(name = "golangci-lint")]
     GolangciLint {
         /// Additional golangci-lint arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// gofmt: -l list capped with recall, -d summarised per file
+    #[command(disable_help_flag = true)]
+    Gofmt {
+        /// gofmt arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// goimports: -l list capped with recall, -d summarised per file
+    #[command(disable_help_flag = true)]
+    Goimports {
+        /// goimports arguments
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -2911,6 +2928,12 @@ fn run_cli() -> Result<i32> {
 
         Commands::GolangciLint { args } => golangci_cmd::run(&args, cli.verbose)?,
 
+        Commands::Gofmt { args } => gofmt_cmd::run(gofmt_cmd::FmtTool::Gofmt, &args, cli.verbose)?,
+
+        Commands::Goimports { args } => {
+            gofmt_cmd::run(gofmt_cmd::FmtTool::Goimports, &args, cli.verbose)?
+        }
+
         Commands::Goreleaser { args } => goreleaser_cmd::run(&args, cli.verbose)?,
 
         Commands::Gotestsum { args } => gotestsum_cmd::run(&args, cli.verbose)?,
@@ -3332,6 +3355,8 @@ fn is_operational_command(cmd: &Commands) -> bool {
             | Commands::Go { .. }
             | Commands::Sbt { .. }
             | Commands::GolangciLint { .. }
+            | Commands::Gofmt { .. }
+            | Commands::Goimports { .. }
             | Commands::Goreleaser { .. }
             | Commands::Gotestsum { .. }
             | Commands::Govulncheck { .. }
@@ -3877,6 +3902,8 @@ mod tests {
             "go",
             "gt",
             "golangci-lint",
+            "gofmt",
+            "goimports",
             "goreleaser",
             "gotestsum",
             "govulncheck",

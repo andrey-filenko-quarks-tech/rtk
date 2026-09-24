@@ -362,6 +362,8 @@ const RECALL_FAMILIES: &[&str] = &[
     "git",
     "glab",
     "go",
+    "gofmt",
+    "goimports",
     "goreleaser",
     "gotestsum",
     "govulncheck",

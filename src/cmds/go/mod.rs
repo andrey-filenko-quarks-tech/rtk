@@ -1,9 +1,8 @@
-// Temporary: `GoFlags::rest` has no reader until gofmt's stdin rule lands.
-#[allow(dead_code)]
 pub mod go_args;
 pub mod go_cmd;
 pub mod go_run;
 pub mod go_tool;
+pub mod gofmt_cmd;
 pub mod golangci_cmd;
 pub mod goreleaser_cmd;
 pub mod gotestsum_cmd;

@@ -5372,6 +5372,31 @@ mod tests {
     }
 
     #[test]
+    fn test_rewrite_gofmt_and_goimports() {
+        assert_eq!(
+            rewrite_command_no_prefixes("gofmt -l .", &[]),
+            Some("rtk gofmt -l .".into())
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("goimports -d main.go", &[]),
+            Some("rtk goimports -d main.go".into())
+        );
+    }
+
+    #[test]
+    fn test_gofmt_lists_stay_raw_in_pipelines() {
+        for cmd in ["gofmt -l . | xargs gofmt -w", "goimports -l . | wc -l"] {
+            let rewritten = rewrite_command_no_prefixes(cmd, &[]);
+            assert!(
+                rewritten
+                    .as_deref()
+                    .is_none_or(|r| !r.starts_with("rtk gofmt") && !r.starts_with("rtk goimports")),
+                "{cmd} → {rewritten:?}"
+            );
+        }
+    }
+
+    #[test]
     fn test_rewrite_golangci_lint() {
         assert_eq!(
             rewrite_command_no_prefixes("golangci-lint run ./...", &[]),

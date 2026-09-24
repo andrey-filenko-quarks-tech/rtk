@@ -651,6 +651,24 @@ pub const RULES: &[RtkRule] = &[
         savings_pct: 85.0,
         ..RtkRule::DEFAULT
     },
+    // Not pipeline-safe: `gofmt -l . | xargs …` consumes the file list, and a capped list
+    // would silently drop files from the next stage.
+    RtkRule {
+        pattern: r"^gofmt\s",
+        rtk_cmd: "rtk gofmt",
+        rewrite_prefixes: &["gofmt"],
+        category: "Go",
+        savings_pct: 60.0,
+        ..RtkRule::DEFAULT
+    },
+    RtkRule {
+        pattern: r"^goimports\s",
+        rtk_cmd: "rtk goimports",
+        rewrite_prefixes: &["goimports"],
+        category: "Go",
+        savings_pct: 60.0,
+        ..RtkRule::DEFAULT
+    },
     // Scala/SBT
     RtkRule {
         pattern: r#"^sbt\s+["']?(testOnly|testQuick|test|compile|run|clean|assembly|package)(?:[\s"']|$)"#,

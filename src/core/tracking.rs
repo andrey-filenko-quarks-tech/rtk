@@ -1588,7 +1588,8 @@ fn categorize_command(rtk_cmd: &str) -> String {
         "npm" | "npx" | "pnpm" | "bun" | "bunx" | "deno" | "vitest" | "tsc" | "lint"
         | "prettier" | "next" | "playwright" | "prisma" => "js",
         "pytest" | "ruff" | "mypy" | "pip" | "sqlfluff" => "python",
-        "go" | "golangci-lint" | "goreleaser" | "gotestsum" | "govulncheck" | "staticcheck" => "go",
+        "go" | "gofmt" | "goimports" | "golangci-lint" | "goreleaser" | "gotestsum"
+        | "govulncheck" | "staticcheck" => "go",
         "docker" | "kubectl" => "cloud",
         "rspec" | "rubocop" | "rake" => "ruby",
         "dotnet" => "dotnet",

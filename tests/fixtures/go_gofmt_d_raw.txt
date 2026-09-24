@@ -1,0 +1,33 @@
+diff f1.go.orig f1.go
+--- f1.go.orig
++++ f1.go
+@@ -1,3 +1,5 @@
+ package fmtp
+-func  F1( ) int {
+-return  1}
++
++func F1() int {
++	return 1
++}
+diff f2.go.orig f2.go
+--- f2.go.orig
++++ f2.go
+@@ -1,3 +1,5 @@
+ package fmtp
+-func  F2( ) int {
+-return  2}
++
++func F2() int {
++	return 2
++}
+diff f3.go.orig f3.go
+--- f3.go.orig
++++ f3.go
+@@ -1,3 +1,5 @@
+ package fmtp
+-func  F3( ) int {
+-return  3}
++
++func F3() int {
++	return 3
++}

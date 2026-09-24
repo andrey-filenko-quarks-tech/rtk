@@ -1,5 +1,6 @@
 //! Filters Go command output — test results, build errors, vet warnings.
 
+use crate::cmds::go::go_tool::ToolBin;
 use crate::core::guard::never_worse;
 use crate::core::runner;
 use crate::core::stream::{CaptureResult, exec_capture};
@@ -7,6 +8,7 @@ use crate::core::tracking;
 use crate::core::truncate::CAP_ERRORS;
 use crate::core::utils::{resolved_command, truncate};
 use crate::golangci_cmd;
+use crate::staticcheck_cmd;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -133,6 +135,9 @@ pub fn run_other(args: &[OsString], verbose: u8) -> Result<i32> {
     if let Some((tool, tool_args)) = match_go_tool(args) {
         match tool {
             GoTool::GolangciLint => return run_go_tool_golangci_lint(tool_args, verbose),
+            GoTool::Staticcheck => {
+                return staticcheck_cmd::run_with(ToolBin::GoTool, &lossy_args(tool_args), verbose);
+            }
         }
     }
 
@@ -200,12 +205,14 @@ fn has_golangci_format_flag(args: &[OsString]) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum GoTool {
     GolangciLint,
+    Staticcheck,
 }
 
 impl GoTool {
     fn from_name(name: &str) -> Option<Self> {
         match name {
             "golangci-lint" => Some(Self::GolangciLint),
+            "staticcheck" => Some(Self::Staticcheck),
             _ => None,
         }
     }
@@ -220,6 +227,14 @@ fn match_go_tool(args: &[OsString]) -> Option<(GoTool, &[OsString])> {
         return Some((tool, &args[2..]));
     }
     None
+}
+
+/// Lossy: the tools' own flags are ASCII; a non-UTF-8 argument has its invalid bytes replaced
+/// with U+FFFD on every path, passthrough included.
+fn lossy_args(args: &[OsString]) -> Vec<String> {
+    args.iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect()
 }
 
 /// Run `go tool golangci-lint` and filter its output via the golangci JSON filter.
@@ -1095,6 +1110,14 @@ utils.go:15:5: unreachable code"#;
         let (tool, rest) = match_go_tool(&args).expect("should match");
         assert_eq!(tool, GoTool::GolangciLint);
         assert!(rest.is_empty());
+    }
+
+    #[test]
+    fn test_match_go_tool_staticcheck() {
+        let args = os(&["tool", "staticcheck", "./..."]);
+        let (tool, rest) = match_go_tool(&args).expect("should match");
+        assert_eq!(tool, GoTool::Staticcheck);
+        assert_eq!(rest, &os(&["./..."])[..]);
     }
 
     #[test]

@@ -392,6 +392,7 @@ const RECALL_FAMILIES: &[&str] = &[
     "ruff",
     "run",
     "sbt",
+    "staticcheck",
     "test",
     "tsc",
     "uv",

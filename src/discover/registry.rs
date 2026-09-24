@@ -2545,6 +2545,7 @@ mod tests {
                 "rtk find",
                 "rtk git",
                 "rtk go",
+                "rtk go tool staticcheck",
                 "rtk golangci-lint run",
                 "rtk grep",
                 "rtk hadolint",
@@ -2578,6 +2579,7 @@ mod tests {
                 "rtk ruff",
                 "rtk shellcheck",
                 "rtk shopify",
+                "rtk staticcheck",
                 "rtk swift",
                 "rtk systemctl",
                 "rtk terraform",
@@ -5278,6 +5280,36 @@ mod tests {
         assert_eq!(
             rewrite_command_no_prefixes("go vet ./...", &[]),
             Some("rtk go vet ./...".into())
+        );
+    }
+
+    #[test]
+    fn test_rewrite_staticcheck() {
+        assert_eq!(
+            rewrite_command_no_prefixes("staticcheck ./...", &[]),
+            Some("rtk staticcheck ./...".into())
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool staticcheck ./...", &[]),
+            Some("rtk go tool staticcheck ./...".into())
+        );
+    }
+
+    #[test]
+    fn test_exclude_staticcheck_covers_go_tool_spelling() {
+        let excluded = vec!["staticcheck".to_string()];
+        assert_eq!(
+            rewrite_command_no_prefixes("staticcheck ./...", &excluded),
+            None
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool staticcheck ./...", &excluded),
+            None
+        );
+        // The `go tool` rule's second prefix never captures a bare invocation.
+        assert_eq!(
+            rewrite_command_no_prefixes("staticcheck ./...", &["go tool staticcheck".to_string()]),
+            Some("rtk staticcheck ./...".into())
         );
     }
 

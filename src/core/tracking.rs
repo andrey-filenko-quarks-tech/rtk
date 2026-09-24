@@ -1587,7 +1587,7 @@ fn categorize_command(rtk_cmd: &str) -> String {
         "npm" | "npx" | "pnpm" | "bun" | "bunx" | "deno" | "vitest" | "tsc" | "lint"
         | "prettier" | "next" | "playwright" | "prisma" => "js",
         "pytest" | "ruff" | "mypy" | "pip" | "sqlfluff" => "python",
-        "go" | "golangci-lint" => "go",
+        "go" | "golangci-lint" | "staticcheck" => "go",
         "docker" | "kubectl" => "cloud",
         "rspec" | "rubocop" | "rake" => "ruby",
         "dotnet" => "dotnet",

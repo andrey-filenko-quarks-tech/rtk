@@ -10,7 +10,7 @@ mod parser;
 use cmds::cloud::{aws_cmd, container, curl_cmd, psql_cmd, wget_cmd};
 use cmds::dotnet::{binlog, dotnet_cmd, dotnet_format_report, dotnet_trx};
 use cmds::git::{diff_cmd, gh_cmd, git_cmd, glab_cmd, gt_cmd};
-use cmds::go::{go_cmd, golangci_cmd};
+use cmds::go::{go_cmd, go_mod_cmd, golangci_cmd};
 use cmds::js::{
     bun_cmd, deno_cmd, lint_cmd, next_cmd, npm_cmd, playwright_cmd, pnpm_cmd, prettier_cmd,
     prisma_cmd, tsc_cmd, vitest_cmd,
@@ -1370,6 +1370,13 @@ enum GoCommands {
     /// Vet with compact output
     Vet {
         /// Additional go vet arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Module maintenance: `graph` summarised, `tidy` diffed, others passthrough
+    #[command(disable_help_flag = true)]
+    Mod {
+        /// go mod subcommand and arguments
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -2855,6 +2862,7 @@ fn run_cli() -> Result<i32> {
             GoCommands::Test { args } => go_cmd::run_test(&args, cli.verbose)?,
             GoCommands::Build { args } => go_cmd::run_build(&args, cli.verbose)?,
             GoCommands::Vet { args } => go_cmd::run_vet(&args, cli.verbose)?,
+            GoCommands::Mod { args } => go_mod_cmd::run(&args, cli.verbose)?,
             GoCommands::Other(args) => go_cmd::run_other(&args, cli.verbose)?,
         },
 

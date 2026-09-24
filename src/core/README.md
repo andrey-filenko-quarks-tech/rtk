@@ -141,6 +141,10 @@ Core provides infrastructure that `cmds/` and other components consume. These co
 
 Consumers must call `timer.track()` on **all** code paths — success, failure, and fallback. Calling `std::process::exit()` before `track()` loses metrics. The raw string passed to `track()` should include both stdout and stderr to produce accurate savings percentages.
 
+### Printing (`runner::emit_guarded`, `run_filtered`)
+
+The runner prints the guarded output with exactly one trailing newline, and prints nothing at all when it is empty: a command that emitted nothing makes rtk emit nothing, not a blank line. Filters may return text with or without a final `\n`; `RunOptions::no_trailing_newline` still prints the text verbatim.
+
 ### Output recovery (`tee_and_hint` + recall store)
 
 Consumers that parse structured output (JSON, NDJSON, state machines) should call `tee::tee_and_hint()` to persist raw output for LLM recovery on failure. It must be called before `std::process::exit()`.

@@ -19,8 +19,16 @@ pub fn emit_guarded(filtered: &str, hint: Option<&str>, raw: &str) -> String {
         None => filtered.to_string(),
     };
     let shown = crate::core::guard::never_worse(raw, &body).to_string();
-    println!("{}", shown);
+    if let Some(line) = printable(&shown) {
+        println!("{}", line);
+    }
     shown
+}
+
+/// What `println!` should print: nothing for empty output (a blank line would be more than a
+/// silent command emitted), and output that already ends in a newline without a second one.
+fn printable(text: &str) -> Option<&str> {
+    (!text.is_empty()).then(|| text.strip_suffix('\n').unwrap_or(text))
 }
 
 pub fn print_with_hint(
@@ -147,8 +155,8 @@ where
         let guarded = crate::core::guard::never_worse(raw_for_tracking, &filtered).to_string();
         if opts.no_trailing_newline {
             print!("{}", guarded);
-        } else {
-            println!("{}", guarded);
+        } else if let Some(line) = printable(&guarded) {
+            println!("{}", line);
         }
         guarded
     };
@@ -988,6 +996,19 @@ fn is_bun_count_line(trimmed: &str) -> bool {
         (Some(count), Some("pass" | "fail" | "skip" | "todo" | "error"), None)
             if count.chars().all(|c| c.is_ascii_digit())
     )
+}
+
+#[cfg(test)]
+mod printable_tests {
+    use super::*;
+
+    #[test]
+    fn empty_output_prints_nothing_and_one_newline_is_enough() {
+        assert_eq!(printable(""), None);
+        assert_eq!(printable("ok"), Some("ok"));
+        assert_eq!(printable("ok\n"), Some("ok"));
+        assert_eq!(printable("a\n\n"), Some("a\n"));
+    }
 }
 
 #[cfg(test)]

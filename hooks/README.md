@@ -277,11 +277,11 @@ The registry (`src/discover/registry.rs`) handles command patterns across these 
 
 | Category | Examples | Savings |
 |----------|----------|---------|
-| Test Runners | vitest, pytest, cargo test, go test, playwright | 90-99% |
+| Test Runners | vitest, pytest, cargo test, go test, gotestsum, playwright | 90-99% |
 | Build Tools | cargo build, npm, pnpm, dotnet, make | 70-90% |
 | VCS | git status/log/diff/show | 70-80% |
 | Language Servers | tsc, mypy | 80-83% |
-| Linters | eslint, ruff, golangci-lint, biome | 80-85% |
+| Linters | eslint, ruff, golangci-lint, staticcheck, biome | 80-85% |
 | Package Managers | pip, cargo install, pnpm list | 75-80% |
 | File Operations | ls, find, grep, cat, head, tail | 60-75% |
 | Infrastructure | docker, kubectl, aws, terraform | 75-85% |

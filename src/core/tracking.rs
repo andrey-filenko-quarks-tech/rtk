@@ -470,6 +470,7 @@ const SUBCOMMAND_ROUTERS: &[&str] = &[
     "git",
     "glab",
     "go",
+    "goreleaser",
     "gradlew",
     "gt",
     "helm",
@@ -1587,7 +1588,7 @@ fn categorize_command(rtk_cmd: &str) -> String {
         "npm" | "npx" | "pnpm" | "bun" | "bunx" | "deno" | "vitest" | "tsc" | "lint"
         | "prettier" | "next" | "playwright" | "prisma" => "js",
         "pytest" | "ruff" | "mypy" | "pip" | "sqlfluff" => "python",
-        "go" | "golangci-lint" | "gotestsum" | "govulncheck" | "staticcheck" => "go",
+        "go" | "golangci-lint" | "goreleaser" | "gotestsum" | "govulncheck" | "staticcheck" => "go",
         "docker" | "kubectl" => "cloud",
         "rspec" | "rubocop" | "rake" => "ruby",
         "dotnet" => "dotnet",
@@ -1995,6 +1996,10 @@ mod command_label_tests {
                 "rtk git log",
             ),
             ("rtk git status --porcelain", "rtk git status"),
+            (
+                "rtk goreleaser release --snapshot",
+                "rtk goreleaser release",
+            ),
             ("rtk git show HEAD:src/core/utils.rs", "rtk git show"),
             (
                 "rtk gh issue comment 2493 --repo rtk-ai/rtk",

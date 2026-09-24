@@ -630,6 +630,27 @@ pub const RULES: &[RtkRule] = &[
         savings_pct: 80.0,
         ..RtkRule::DEFAULT
     },
+    RtkRule {
+        pattern: r"^goreleaser\s+(release|build)(?:\s|$)",
+        rtk_cmd: "rtk goreleaser",
+        pipeline_safety: PipelineSafety::ProducerOnly,
+        rewrite_prefixes: &["goreleaser"],
+        category: "Go",
+        savings_pct: 85.0,
+        subcmd_savings: &[("release", 85.0), ("build", 80.0)],
+        ..RtkRule::DEFAULT
+    },
+    // No subcmd_savings: the telemetry label for `rtk go tool goreleaser release` is
+    // `rtk go tool`. The second prefix is read only by `exclude_commands` peeling.
+    RtkRule {
+        pattern: r"^go\s+tool\s+goreleaser\s+(release|build)(?:\s|$)",
+        rtk_cmd: "rtk go tool goreleaser",
+        pipeline_safety: PipelineSafety::ProducerOnly,
+        rewrite_prefixes: &["go tool goreleaser", "goreleaser"],
+        category: "Go",
+        savings_pct: 85.0,
+        ..RtkRule::DEFAULT
+    },
     // Scala/SBT
     RtkRule {
         pattern: r#"^sbt\s+["']?(testOnly|testQuick|test|compile|run|clean|assembly|package)(?:[\s"']|$)"#,

@@ -8,6 +8,7 @@ use crate::core::tracking;
 use crate::core::truncate::CAP_ERRORS;
 use crate::core::utils::{resolved_command, truncate};
 use crate::golangci_cmd;
+use crate::goreleaser_cmd;
 use crate::gotestsum_cmd;
 use crate::govulncheck_cmd;
 use crate::staticcheck_cmd;
@@ -137,6 +138,9 @@ pub fn run_other(args: &[OsString], verbose: u8) -> Result<i32> {
     if let Some((tool, tool_args)) = match_go_tool(args) {
         match tool {
             GoTool::GolangciLint => return run_go_tool_golangci_lint(tool_args, verbose),
+            GoTool::Goreleaser => {
+                return goreleaser_cmd::run_with(ToolBin::GoTool, &lossy_args(tool_args), verbose);
+            }
             GoTool::Gotestsum => {
                 return gotestsum_cmd::run_with(ToolBin::GoTool, &lossy_args(tool_args), verbose);
             }
@@ -213,6 +217,7 @@ fn has_golangci_format_flag(args: &[OsString]) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum GoTool {
     GolangciLint,
+    Goreleaser,
     Gotestsum,
     Govulncheck,
     Staticcheck,
@@ -222,6 +227,7 @@ impl GoTool {
     fn from_name(name: &str) -> Option<Self> {
         match name {
             "golangci-lint" => Some(Self::GolangciLint),
+            "goreleaser" => Some(Self::Goreleaser),
             "gotestsum" => Some(Self::Gotestsum),
             "govulncheck" => Some(Self::Govulncheck),
             "staticcheck" => Some(Self::Staticcheck),

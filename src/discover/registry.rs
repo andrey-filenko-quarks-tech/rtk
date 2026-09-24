@@ -2545,10 +2545,12 @@ mod tests {
                 "rtk find",
                 "rtk git",
                 "rtk go",
+                "rtk go tool goreleaser",
                 "rtk go tool gotestsum",
                 "rtk go tool govulncheck",
                 "rtk go tool staticcheck",
                 "rtk golangci-lint run",
+                "rtk goreleaser",
                 "rtk gotestsum",
                 "rtk govulncheck",
                 "rtk grep",
@@ -5347,6 +5349,24 @@ mod tests {
         let excluded = vec!["gotestsum".to_string()];
         assert_eq!(
             rewrite_command_no_prefixes("go tool gotestsum", &excluded),
+            None
+        );
+    }
+
+    #[test]
+    fn test_rewrite_goreleaser() {
+        assert_eq!(
+            rewrite_command_no_prefixes("goreleaser release --snapshot --clean", &[]),
+            Some("rtk goreleaser release --snapshot --clean".into())
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool goreleaser build --single-target", &[]),
+            Some("rtk go tool goreleaser build --single-target".into())
+        );
+        assert_eq!(rewrite_command_no_prefixes("goreleaser check", &[]), None);
+        let excluded = vec!["goreleaser".to_string()];
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool goreleaser release", &excluded),
             None
         );
     }

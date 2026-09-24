@@ -437,6 +437,30 @@ else
     skip_test "rtk golangci-lint" "golangci-lint not installed"
 fi
 
+# These tools print their own help markers, not clap's `Usage:`.
+for tool in staticcheck govulncheck gotestsum; do
+    if command -v "$tool" &>/dev/null; then
+        assert_contains "rtk $tool --help"        "Usage"                  rtk "$tool" --help
+    else
+        skip_test "rtk $tool" "$tool not installed"
+    fi
+done
+
+if command -v goreleaser &>/dev/null; then
+    assert_contains "rtk goreleaser --help"       "USAGE"                  rtk goreleaser --help
+else
+    skip_test "rtk goreleaser" "goreleaser not installed"
+fi
+
+# goimports --help exits 2, so both formatters are checked on stdin instead.
+for tool in gofmt goimports; do
+    if command -v "$tool" &>/dev/null; then
+        assert_contains "rtk $tool -l (stdin)"    "<standard input>"       bash -c "printf 'package p\nfunc  f(){}\n' | rtk $tool -l"
+    else
+        skip_test "rtk $tool" "$tool not installed"
+    fi
+done
+
 # ── 29. Graphite (conditional) ─────────────────────
 
 section "Graphite (conditional)"
@@ -496,6 +520,9 @@ section "Rewrite"
 
 assert_contains "rewrite git status"          "rtk git status"         rtk rewrite "git status"
 assert_contains "rewrite cargo test"          "rtk cargo test"         rtk rewrite "cargo test"
+assert_contains "rewrite staticcheck"         "rtk staticcheck"        rtk rewrite "staticcheck ./..."
+assert_contains "rewrite go tool gotestsum"   "rtk go tool gotestsum"  rtk rewrite "go tool gotestsum -- ./..."
+assert_contains "rewrite goreleaser build"    "rtk goreleaser build"   rtk rewrite "goreleaser build --snapshot"
 assert_contains "rewrite compound &&"         "rtk git status"         rtk rewrite "git status && cargo test"
 assert_contains "rewrite pipe preserves"      "| head"                 rtk rewrite "git log | head"
 

@@ -234,6 +234,11 @@ rtk cargo build                 # Cargo build (-80%)
 rtk cargo clippy                # Cargo clippy (-80%)
 rtk ruff check                  # Python linting (JSON, -80%)
 rtk golangci-lint run           # Go linting (JSON, -85%)
+rtk staticcheck ./...           # Findings grouped by check (JSON, -99%)
+rtk govulncheck ./...           # Vulnerabilities grouped by module (-90%)
+rtk gotestsum                   # Same view as rtk go test
+rtk goreleaser release          # Outcome + artifacts, errors on failure (-85%)
+rtk gofmt -l .                  # File list capped with recall; -d per file
 rtk rubocop                     # Ruby linting (JSON, -60%+)
 rtk mvnd verify                 # Maven Daemon (same filters as rtk mvn)
 rtk sbt test                    # ScalaTest output (-90%)

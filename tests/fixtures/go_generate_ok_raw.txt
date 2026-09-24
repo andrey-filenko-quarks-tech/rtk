@@ -1,0 +1,30 @@
+24 Sep 26 17:13 EEST INF couldn't read any config file version=v2.53.3
+24 Sep 26 17:13 EEST INF Starting mockery dry-run=false version=v2.53.3
+24 Sep 26 17:13 EEST INF Using config:  dry-run=false version=v2.53.3
+24 Sep 26 17:13 EEST INF Walking dry-run=false version=v2.53.3
+24 Sep 26 17:13 EEST INF Generating mock dry-run=false interface=Store1 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF writing mock to file dry-run=false interface=Store1 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF Generating mock dry-run=false interface=Store10 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF writing mock to file dry-run=false interface=Store10 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF Generating mock dry-run=false interface=Store11 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF writing mock to file dry-run=false interface=Store11 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF Generating mock dry-run=false interface=Store12 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF writing mock to file dry-run=false interface=Store12 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF Generating mock dry-run=false interface=Store2 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF writing mock to file dry-run=false interface=Store2 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF Generating mock dry-run=false interface=Store3 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF writing mock to file dry-run=false interface=Store3 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF Generating mock dry-run=false interface=Store4 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF writing mock to file dry-run=false interface=Store4 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF Generating mock dry-run=false interface=Store5 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF writing mock to file dry-run=false interface=Store5 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF Generating mock dry-run=false interface=Store6 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF writing mock to file dry-run=false interface=Store6 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF Generating mock dry-run=false interface=Store7 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF writing mock to file dry-run=false interface=Store7 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF Generating mock dry-run=false interface=Store8 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF writing mock to file dry-run=false interface=Store8 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF Generating mock dry-run=false interface=Store9 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST INF writing mock to file dry-run=false interface=Store9 qualified-name=example.com/mocks/store version=v2.53.3
+24 Sep 26 17:13 EEST WRN DEPRECATION: use of the packages config will be the only way to generate mocks in v3. Please migrate your config to use the packages feature. deprecation-name=packages migration=https://vektra.github.io/mockery/v2.53/migrating_to_packages/ url=https://vektra.github.io/mockery/v2.53/features/#packages-configuration version=v2.53.3
+24 Sep 26 17:13 EEST WRN DEPRECATION: issue-845-fix must be set to True to remove this warning. Visit the link for more details. deprecation-name=issue-845-fix url=https://vektra.github.io/mockery/v2.53/deprecations/#issue-845-fix version=v2.53.3

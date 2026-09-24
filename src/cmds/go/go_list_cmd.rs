@@ -2,7 +2,7 @@
 //! requirements, `-m -u all` shows only modules with updates. Machine-shaped forms pass through.
 
 use crate::cmds::go::go_mod_cmd::{
-    self, Require, append_hint, flag_value, go_flags, has_flag, wants_help,
+    self, GoFlags, Require, append_hint, bool_flag, flag_value, go_flags, has_flag, wants_help,
 };
 use crate::core::arg_tokenizer::{TokenKind, ValueSpec};
 use crate::core::runner;
@@ -17,14 +17,13 @@ const MAX_MODULES: usize = CAP_INVENTORY;
 const MAX_UPDATES: usize = CAP_LIST;
 const LIST_TEE_LABEL: &str = "go-list";
 
-/// Flags whose output is meant for a program, not a reader: never reshaped.
-const MACHINE_FLAGS: &[&str] = &[
-    "f",
-    "json",
+/// Flags whose output is meant for a program, not a reader: never reshaped. `-f` and `-json`
+/// take values; the rest are booleans, off again with an explicit `=false`.
+const MACHINE_VALUE_FLAGS: &[&str] = &["f", "json", "reuse"];
+const MACHINE_BOOL_FLAGS: &[&str] = &[
     "e",
     "versions",
     "retracted",
-    "reuse",
     "find",
     "deps",
     "test",
@@ -55,14 +54,21 @@ enum ListInvocation {
     Passthrough,
 }
 
+#[cfg(test)]
 fn classify(args: &[String]) -> ListInvocation {
-    let flags = go_flags(args, &list_takes_value);
-    if wants_help(&flags.tokens) || MACHINE_FLAGS.iter().any(|f| has_flag(&flags.tokens, f)) {
+    classify_flags(args, &go_flags(args, &list_takes_value))
+}
+
+fn classify_flags(args: &[String], flags: &GoFlags<'_>) -> ListInvocation {
+    let tokens = &flags.tokens;
+    if wants_help(tokens)
+        || MACHINE_VALUE_FLAGS.iter().any(|f| has_flag(tokens, f))
+        || MACHINE_BOOL_FLAGS.iter().any(|f| bool_flag(tokens, f))
+    {
         return ListInvocation::Passthrough;
     }
     let patterns = &args[flags.rest..];
-    let modules = has_flag(&flags.tokens, "m");
-    match (modules, has_flag(&flags.tokens, "u"), patterns) {
+    match (bool_flag(tokens, "m"), bool_flag(tokens, "u"), patterns) {
         (true, true, [all]) if all == "all" => ListInvocation::ModulesUpdates,
         (true, false, [all]) if all == "all" => ListInvocation::ModulesAll,
         (false, false, _) => ListInvocation::Packages,
@@ -75,7 +81,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<i32> {
     let flags = go_flags(&args, &list_takes_value);
     let chdir = flag_value(&flags.tokens, "C");
     let modfile = flag_value(&flags.tokens, "modfile");
-    match classify(&args) {
+    match classify_flags(&args, &flags) {
         ListInvocation::Passthrough => go_mod_cmd::run_go_passthrough("list", &args, verbose),
         // Several main modules: the direct/indirect split has no single go.mod to read.
         ListInvocation::ModulesAll if go_mod_cmd::in_workspace(chdir) => {
@@ -329,6 +335,32 @@ fn filter_modules_updates(stdout: &str, requires: Option<&[Require]>) -> String 
 mod tests {
     use super::*;
     use crate::cmds::go::go_mod_cmd::tests::{assert_savings, s};
+
+    #[test]
+    fn explicit_false_turns_a_boolean_flag_off() {
+        assert_eq!(
+            classify(&s(&["-m=false", "./..."])),
+            ListInvocation::Packages
+        );
+        assert_eq!(
+            classify(&s(&["-m", "-u=false", "all"])),
+            ListInvocation::ModulesAll
+        );
+        assert_eq!(
+            classify(&s(&["-e=false", "./..."])),
+            ListInvocation::Packages
+        );
+    }
+
+    #[test]
+    fn optional_value_flags_never_take_the_next_argument() {
+        let args = s(&["-buildvcs", "./..."]);
+        assert_eq!(go_flags(&args, &list_takes_value).rest, 1);
+        let args = s(&["-json=Dir,Name", "./..."]);
+        let flags = go_flags(&args, &list_takes_value);
+        assert_eq!(flag_value(&flags.tokens, "json"), Some("Dir,Name"));
+        assert_eq!(flags.rest, 1);
+    }
 
     #[test]
     fn classifies_list_forms() {

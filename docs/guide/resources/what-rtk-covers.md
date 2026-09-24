@@ -84,7 +84,7 @@ Every percentage below measures **bash output bytes removed** — the only thing
 | `go mod graph` | 80% | Counts, direct requirements, version conflicts |
 | `go mod tidy` | 95% | Download chatter dropped; go.mod changes listed |
 | `go list` | 65-77% | Shared module path once; `-m -u all` direct updates only |
-| `go generate` | 60% | Success collapses to ok; failures keep the tail |
+| `go generate` | 65-99% | Success collapses to ok; failures keep the tail |
 
 ## Ruby
 

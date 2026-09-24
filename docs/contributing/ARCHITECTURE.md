@@ -168,7 +168,7 @@ Savings by ecosystem:
   GIT (cmds/git/)          85-99%    status, diff, log, gh, gt
   JS/TS (cmds/js/)         70-99%    lint, tsc, next, prettier, playwright, prisma, vitest, pnpm
   PYTHON (cmds/python/)    70-90%    ruff, pytest, mypy, pip
-  GO (cmds/go/)            75-90%    go test/build/vet/mod/list/generate, golangci-lint
+  GO (cmds/go/)            65-95%    go test/build/vet/mod/list/generate, golangci-lint
   RUBY (cmds/ruby/)        60-90%    rake, rspec, rubocop
   DOTNET (cmds/dotnet/)    70-85%    dotnet build/test, binlog
   CLOUD (cmds/cloud/)      60-80%    aws, docker/kubectl, curl, wget, psql

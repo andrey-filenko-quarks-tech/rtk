@@ -1,7 +1,8 @@
-//! Filters `go generate`: success collapses to `ok`, a failure keeps the failing generator's
-//! last output lines. Go's own `running "…"` error lines arrive on stderr, forwarded whole.
+//! Filters `go generate`: success collapses to `ok`, a failure keeps the tail — the failing
+//! generator's last lines and Go's own `running "…"` verdict. Generators such as mockery log on
+//! stderr, so the filter reads the combined stream.
 
-use crate::cmds::go::go_mod_cmd::{self, append_hint, go_flags, has_flag, wants_help};
+use crate::cmds::go::go_mod_cmd::{self, append_hint, bool_flag, go_flags, wants_help};
 use crate::core::arg_tokenizer::{TokenKind, ValueSpec};
 use crate::core::runner;
 use crate::core::tee;
@@ -31,7 +32,7 @@ fn generate_takes_value(kind: TokenKind, name: &str) -> Option<ValueSpec> {
 /// `-n`/`-x`/`-v` ask for Go's own trace, which is theirs to read.
 fn filters(args: &[String]) -> bool {
     let tokens = go_flags(args, &generate_takes_value).tokens;
-    !(wants_help(&tokens) || ["n", "x", "v"].iter().any(|f| has_flag(&tokens, f)))
+    !(wants_help(&tokens) || ["n", "x", "v"].iter().any(|f| bool_flag(&tokens, f)))
 }
 
 pub fn run(args: &[String], verbose: u8) -> Result<i32> {
@@ -48,28 +49,29 @@ pub fn run(args: &[String], verbose: u8) -> Result<i32> {
         cmd,
         "go generate",
         &args.join(" "),
-        move |stdout, exit_code| {
+        move |output, exit_code| {
             if verbose > 1 {
-                eprintln!("{stdout}");
+                eprintln!("{output}");
             }
-            let filtered = filter_go_generate(stdout, exit_code);
-            append_hint(stdout, filtered, exit_code, || {
-                tee::force_tee_hint(stdout, GENERATE_TEE_LABEL)
+            let filtered = filter_go_generate(output, exit_code);
+            append_hint(output, filtered, exit_code, || {
+                tee::force_tee_hint(output, GENERATE_TEE_LABEL)
             })
         },
-        runner::RunOptions::stdout_only().tee(GENERATE_TEE_LABEL),
+        // Combined: generators log on stderr (mockery), and Go's verdict is on stderr too.
+        runner::RunOptions::with_tee(GENERATE_TEE_LABEL),
     )
 }
 
-/// stdout only: on success generators' chatter collapses to `ok`; on failure the failing
-/// generator ran last, so its output is the tail.
-fn filter_go_generate(stdout: &str, exit_code: i32) -> String {
+/// On success the generators' chatter collapses to `ok`; on failure the failing generator ran
+/// last and Go reports it last, so the tail of the output is what matters.
+fn filter_go_generate(output: &str, exit_code: i32) -> String {
     if exit_code == 0 {
         return "go generate: ok".to_string();
     }
-    let lines: Vec<&str> = stdout.lines().collect();
+    let lines: Vec<&str> = output.lines().collect();
     if lines.len() <= MAX_FAILURE_LINES {
-        return stdout.to_string();
+        return output.to_string();
     }
     let hidden = lines.len() - MAX_FAILURE_LINES;
     let mut out = vec![format!("… ({hidden} earlier lines)")];
@@ -89,6 +91,7 @@ mod tests {
         for args in [&["-x", "./..."][..], &["-n"], &["-v", "./..."], &["-help"]] {
             assert!(!filters(&s(args)), "{args:?}");
         }
+        assert!(filters(&s(&["-x=false", "./..."])));
     }
 
     #[test]
@@ -106,11 +109,24 @@ mod tests {
         assert_eq!(filter_go_generate("short\n", 1), "short\n");
     }
 
+    // Real mockery v2.53.3 runs: it logs on stderr, so the fixtures are the combined stream.
     #[test]
-    fn failure_fixture() {
-        let input = include_str!("../../../tests/fixtures/go_generate_fail_stdout_raw.txt");
+    fn failure_fixture_keeps_the_generator_error_and_gos_verdict() {
+        let input = include_str!("../../../tests/fixtures/go_generate_fail_raw.txt");
         let out = filter_go_generate(input, 1);
-        assert!(out.ends_with("generated_file_60"), "{out}");
-        assert_savings("go generate (failure)", input, &out);
+        assert!(out.contains("unable to find interface"), "{out}");
+        assert!(
+            out.trim_end()
+                .ends_with("store/store.go:3: running \"mockery\": exit status 1"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn success_fixture_collapses_generator_logs() {
+        let input = include_str!("../../../tests/fixtures/go_generate_ok_raw.txt");
+        let out = filter_go_generate(input, 0);
+        assert_eq!(out, "go generate: ok");
+        assert_savings("go generate (success)", input, &out);
     }
 }

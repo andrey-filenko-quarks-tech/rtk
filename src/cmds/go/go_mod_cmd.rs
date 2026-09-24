@@ -5,7 +5,7 @@
 use crate::core::arg_tokenizer::{self, Dialect, Token, TokenKind, ValueSpec};
 use crate::core::guard::never_worse;
 use crate::core::runner;
-use crate::core::stream::exec_capture;
+use crate::core::stream::{self, FilterMode, StdinMode};
 use crate::core::tee;
 use crate::core::tracking;
 use crate::core::truncate::CAP_LIST;
@@ -68,6 +68,20 @@ pub(crate) fn flag_value<'a>(tokens: &[Token<'a>], name: &str) -> Option<&'a str
         .iter()
         .find(|t| t.kind == TokenKind::Long && t.text == name)
         .and_then(|t| t.value(tokens))
+}
+
+/// A boolean Go flag is on unless its last occurrence carries a false value (`-diff=false`),
+/// as `strconv.ParseBool` reads it.
+pub(crate) fn bool_flag(tokens: &[Token<'_>], name: &str) -> bool {
+    tokens
+        .iter()
+        .rfind(|t| t.kind == TokenKind::Long && t.text == name)
+        .is_some_and(|t| {
+            !matches!(
+                t.attached,
+                Some("0" | "f" | "F" | "false" | "FALSE" | "False")
+            )
+        })
 }
 
 pub(crate) fn wants_help(tokens: &[Token<'_>]) -> bool {
@@ -133,7 +147,7 @@ fn classify(args: &[String]) -> ModInvocation {
         "tidy" => {
             let flags = go_flags(rest, &tidy_takes_value);
             // `-diff` prints what tidy would change and changes nothing: the user's own view.
-            if !filterable(&flags, rest) || has_flag(&flags.tokens, "diff") {
+            if !filterable(&flags, rest) || bool_flag(&flags.tokens, "diff") {
                 ModInvocation::Passthrough
             } else {
                 ModInvocation::Tidy {
@@ -252,11 +266,14 @@ fn filter_go_mod_graph(stdout: &str) -> String {
         .into_iter()
         .filter(|(_, to)| !to.starts_with("go@") && !to.starts_with("toolchain@"))
         .collect();
-    let Some(main) = edges
-        .iter()
-        .map(|(from, _)| *from)
-        .find(|f| !f.contains('@'))
-    else {
+    // Main modules are the unversioned sources: one normally, several in a workspace.
+    let mut mains: Vec<&str> = Vec::new();
+    for (from, _) in &edges {
+        if !from.contains('@') && !mains.contains(from) {
+            mains.push(from);
+        }
+    }
+    let Some(main) = mains.first() else {
         return stdout.to_string();
     };
     let mut adjacency: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -266,17 +283,23 @@ fn filter_go_mod_graph(stdout: &str) -> String {
         nodes.insert(from);
         nodes.insert(to);
     }
-    let mut direct: Vec<(&str, usize)> = adjacency
-        .get(main)
-        .into_iter()
+    let mut direct: Vec<(&str, usize)> = mains
+        .iter()
+        .filter_map(|m| adjacency.get(m))
         .flatten()
         .map(|d| (*d, transitive_count(&adjacency, d)))
         .collect();
     direct.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    direct.dedup_by(|a, b| a.0 == b.0);
     let conflicts = version_conflicts(&edges);
 
+    let others = match mains.len() - 1 {
+        0 => String::new(),
+        1 => " +1 workspace module".to_string(),
+        n => format!(" +{n} workspace modules"),
+    };
     let mut out = format!(
-        "go mod graph: {} modules, {} edges (main {main})\ndirect ({}):\n",
+        "go mod graph: {} modules, {} edges (main {main}{others})\ndirect ({}):\n",
         nodes.len(),
         edges.len(),
         direct.len()
@@ -353,8 +376,12 @@ pub(crate) fn find_go_mod(start: &Path) -> Option<PathBuf> {
 
 /// The `go.mod` a command run with `-C chdir` / `-modfile modfile` works on.
 pub(crate) fn resolve_go_mod(chdir: Option<&str>, modfile: Option<&str>) -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    let base = chdir.map_or_else(|| cwd.clone(), |dir| cwd.join(dir));
+    resolve_go_mod_from(&std::env::current_dir().ok()?, chdir, modfile)
+}
+
+/// `-C` is applied first (relative to `cwd`, or absolute), then `-modfile` relative to it.
+fn resolve_go_mod_from(cwd: &Path, chdir: Option<&str>, modfile: Option<&str>) -> Option<PathBuf> {
+    let base = chdir.map_or_else(|| cwd.to_path_buf(), |dir| cwd.join(dir));
     match modfile {
         Some(file) => Some(base.join(file)),
         None => find_go_mod(&base),
@@ -369,14 +396,43 @@ pub(crate) fn read_requires(path: &Path) -> Option<Vec<Require>> {
 
 /// Workspace mode: `GOWORK` names a file, or (unless `GOWORK=off`) a `go.work` sits above.
 pub(crate) fn in_workspace(chdir: Option<&str>) -> bool {
-    match std::env::var("GOWORK").ok().as_deref() {
+    std::env::current_dir().is_ok_and(|cwd| {
+        let base = chdir.map_or_else(|| cwd.clone(), |dir| cwd.join(dir));
+        in_workspace_with(std::env::var("GOWORK").ok().as_deref(), &base)
+    })
+}
+
+fn in_workspace_with(gowork: Option<&str>, base: &Path) -> bool {
+    match gowork {
         Some("off") => false,
         Some(path) if !path.is_empty() => true,
-        _ => std::env::current_dir().is_ok_and(|cwd| {
-            let base = chdir.map_or_else(|| cwd.clone(), |dir| cwd.join(dir));
-            base.ancestors().any(|dir| dir.join("go.work").is_file())
-        }),
+        _ => base.ancestors().any(|dir| dir.join("go.work").is_file()),
     }
+}
+
+/// A single-line directive's value (`go 1.22`, `toolchain go1.23.1`).
+fn directive(go_mod: &str, name: &str) -> Option<String> {
+    go_mod.lines().map(str::trim).find_map(|line| {
+        line.strip_prefix(name)
+            .filter(|rest| rest.starts_with([' ', '\t']))
+            .map(|rest| rest.trim().to_string())
+    })
+}
+
+/// Changes to the `go` and `toolchain` directives, which `tidy -go=…` rewrites and tidy never
+/// reports either.
+fn directive_changes(before: &str, after: &str) -> Vec<String> {
+    ["go", "toolchain"]
+        .iter()
+        .filter_map(
+            |name| match (directive(before, name), directive(after, name)) {
+                (Some(old), Some(new)) if old != new => Some(format!("~ {name} {old} → {new}")),
+                (None, Some(new)) => Some(format!("+ {name} {new}")),
+                (Some(old), None) => Some(format!("- {name} {old}")),
+                _ => None,
+            },
+        )
+        .collect()
 }
 
 struct TidyReport {
@@ -386,6 +442,14 @@ struct TidyReport {
     changed: usize,
     downloads: usize,
     kept: Vec<String>,
+}
+
+impl TidyReport {
+    /// Directive changes count as `changed`: they are settings, not dependencies.
+    fn add_directive_changes(&mut self, lines: Vec<String>) {
+        self.changed += lines.len();
+        self.changes.extend(lines);
+    }
 }
 
 fn is_tidy_chatter(line: &str) -> bool {
@@ -472,13 +536,12 @@ fn render_tidy(report: &TidyReport, max: usize) -> String {
     if report.changes.len() > max {
         lines.push(format!("  … +{} more", report.changes.len() - max));
     }
-    lines.extend(report.kept.iter().cloned());
     lines.join("\n")
 }
 
-/// The diff is information the raw output never contains (tidy prints nothing about what it
-/// changed), so it is exempt from `never_worse` — see `core/guard.rs`. Everything else is
-/// guarded.
+/// The stdout summary. The diff is information the raw output never contains (tidy prints
+/// nothing about what it changed), so it is exempt from `never_worse` — see `core/guard.rs`;
+/// a summary without changes is guarded. Go's own kept lines go to stderr, where Go wrote them.
 fn emit_tidy(report: &TidyReport, raw: &str) -> String {
     let rendered = render_tidy(report, MAX_TIDY_CHANGES);
     if report.changes.is_empty() {
@@ -502,6 +565,24 @@ fn tidy_tail_hint(
     store(&content.join("\n"), 1 + MAX_TIDY_CHANGES + 1)
 }
 
+/// A failure's recall hint is appended only while it keeps the output within the raw size —
+/// the guard `runner::emit_guarded` applies to body and hint together.
+fn with_failure_hint(body: String, hint: Option<String>, raw: &str) -> String {
+    let Some(hint) = hint else {
+        return body;
+    };
+    let combined = if body.is_empty() {
+        hint
+    } else {
+        format!("{body}\n{hint}")
+    };
+    if never_worse(raw, &combined) == combined {
+        combined
+    } else {
+        body
+    }
+}
+
 fn run_tidy(
     args: &[String],
     chdir: Option<&str>,
@@ -510,39 +591,61 @@ fn run_tidy(
 ) -> Result<i32> {
     let timer = tracking::TimedExecution::start();
     let go_mod = resolve_go_mod(chdir, modfile);
-    let before = go_mod.as_deref().and_then(read_requires);
+    let before_text = go_mod
+        .as_deref()
+        .and_then(|p| std::fs::read_to_string(p).ok());
     let mut cmd = resolved_command("go");
     cmd.arg("mod").args(args);
     if verbose > 0 {
         eprintln!("Running: go mod {}", args.join(" "));
     }
-    let captured = exec_capture(&mut cmd).context("Failed to run go mod tidy")?;
-    let raw = format!("{}{}", captured.stdout, captured.stderr);
+    // `run_streaming` relays SIGINT/SIGTERM to `go`, so a killed rtk never leaves tidy writing
+    // go.mod on its own; the relayed signal is re-raised on the way out.
+    let captured = stream::run_streaming(&mut cmd, StdinMode::Null, FilterMode::CaptureOnly)
+        .context("Failed to run go mod tidy")?;
+    let raw = format!("{}{}", captured.raw_stdout, captured.raw_stderr);
     if verbose > 1 {
         eprintln!("{raw}");
     }
-    let after = go_mod.as_deref().and_then(read_requires);
-    let report = tidy_report(before.as_deref(), after.as_deref(), &raw);
-    let mut shown = emit_tidy(&report, &raw);
-    let hint = if captured.exit_code != 0 {
-        tee::tee_and_hint(&raw, TIDY_TEE_LABEL, captured.exit_code)
-    } else {
-        tidy_tail_hint(&report, |content, offset| {
-            tee::force_tee_tail_hint(content, TIDY_TEE_LABEL, offset)
-        })
-    };
-    if let Some(hint) = hint {
-        shown = if shown.is_empty() {
-            hint
-        } else {
-            format!("{shown}\n{hint}")
-        };
+    let after_text = go_mod
+        .as_deref()
+        .and_then(|p| std::fs::read_to_string(p).ok());
+    let before = before_text.as_deref().map(parse_requires);
+    let after = after_text.as_deref().map(parse_requires);
+    let mut report = tidy_report(before.as_deref(), after.as_deref(), &raw);
+    if let (Some(old), Some(new)) = (&before_text, &after_text) {
+        report.add_directive_changes(directive_changes(old, new));
     }
+    let body = emit_tidy(&report, &raw);
+    let shown = if captured.exit_code != 0 {
+        with_failure_hint(
+            body,
+            tee::tee_and_hint(&raw, TIDY_TEE_LABEL, captured.exit_code),
+            &raw,
+        )
+    } else {
+        match tidy_tail_hint(&report, |content, offset| {
+            tee::force_tee_tail_hint(content, TIDY_TEE_LABEL, offset)
+        }) {
+            Some(hint) => format!("{body}\n{hint}"),
+            None => body,
+        }
+    };
     if !shown.is_empty() {
         println!("{shown}");
     }
+    let kept = report.kept.join("\n");
+    if !kept.is_empty() {
+        eprintln!("{kept}");
+    }
     let label = format!("go mod {}", args.join(" "));
-    timer.track(&label, &format!("rtk {label}"), &raw, &shown);
+    timer.track(
+        &label,
+        &format!("rtk {label}"),
+        &raw,
+        &format!("{shown}{kept}"),
+    );
+    stream::die_by_relayed_signal();
     Ok(captured.exit_code)
 }
 
@@ -855,10 +958,121 @@ go mod tidy: +1 added, -1 removed, ~2 changed (1 modules downloaded)
   + d.io/w v0.2.0
   - b.io/y v1.0.0
   ~ a.io/x v1.0.0 → v1.1.0
-  ~ c.io/z v1.0.0 (now indirect)
-go: finding module for package d.io/w
-go: found d.io/w in d.io/w v0.2.0"
+  ~ c.io/z v1.0.0 (now indirect)"
         );
+        // Go's own messages stay on stderr, where Go wrote them.
+        assert_eq!(
+            report.kept.join("\n"),
+            "go: finding module for package d.io/w\ngo: found d.io/w in d.io/w v0.2.0"
+        );
+    }
+
+    #[test]
+    fn tidy_reports_go_and_toolchain_directive_changes() {
+        let before = "module m\n\ngo 1.21\n\nrequire a.io/x v1.0.0\n";
+        let after = "module m\n\ngo 1.22\n\ntoolchain go1.23.1\n\nrequire a.io/x v1.0.0\n";
+        assert_eq!(
+            directive_changes(before, after),
+            vec!["~ go 1.21 → 1.22", "+ toolchain go1.23.1"]
+        );
+        assert!(directive_changes(before, before).is_empty());
+        let mut report = tidy_report(Some(&[][..]), Some(&[][..]), "");
+        report.add_directive_changes(directive_changes(before, after));
+        assert_eq!(
+            render_tidy(&report, MAX_TIDY_CHANGES),
+            "go mod tidy: +0 added, -0 removed, ~2 changed\n  ~ go 1.21 → 1.22\n  + toolchain go1.23.1"
+        );
+    }
+
+    #[test]
+    fn a_failure_hint_is_dropped_when_it_would_outgrow_the_raw_output() {
+        let hint = "[full output: rtk recall 0123456789ab]".to_string();
+        assert_eq!(
+            with_failure_hint(String::new(), Some(hint.clone()), "x"),
+            ""
+        );
+        let raw = "go: errors parsing go.mod: something went wrong on line 3\n".repeat(3);
+        assert_eq!(
+            with_failure_hint(String::new(), Some(hint.clone()), &raw),
+            hint
+        );
+        assert_eq!(with_failure_hint("sum".into(), None, &raw), "sum");
+    }
+
+    #[test]
+    fn boolean_flags_honour_an_explicit_false() {
+        let args = s(&["-diff=false", "-e"]);
+        let tokens = go_flags(&args, &tidy_takes_value).tokens;
+        assert!(!bool_flag(&tokens, "diff"));
+        assert!(bool_flag(&tokens, "e"));
+        let args = s(&["-e=true", "-x=0"]);
+        let tokens = go_flags(&args, &tidy_takes_value).tokens;
+        assert!(bool_flag(&tokens, "e"));
+        assert!(!bool_flag(&tokens, "x"));
+        assert_eq!(
+            classify(&s(&["tidy", "-diff=false"])),
+            ModInvocation::Tidy {
+                chdir: None,
+                modfile: None
+            }
+        );
+    }
+
+    #[test]
+    fn graph_counts_every_workspace_main_module() {
+        let raw = "\
+example.com/a x.io/p@v1.0.0
+example.com/b y.io/q@v1.0.0
+x.io/p@v1.0.0 z.io/r@v1.0.0
+";
+        assert_eq!(
+            filter_go_mod_graph(raw),
+            "\
+go mod graph: 5 modules, 3 edges (main example.com/a +1 workspace module)
+direct (2):
+  x.io/p@v1.0.0 (+1 transitive)
+  y.io/q@v1.0.0 (+0 transitive)"
+        );
+    }
+
+    #[test]
+    fn resolves_go_mod_from_chdir_and_modfile() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("go.mod"), "module m\n").expect("write");
+        std::fs::create_dir_all(dir.path().join("sub")).expect("mkdir");
+        let cwd = dir.path();
+        assert_eq!(
+            resolve_go_mod_from(cwd, Some("sub"), None),
+            Some(cwd.join("go.mod"))
+        );
+        assert_eq!(
+            resolve_go_mod_from(cwd, Some("sub"), Some("tools.mod")),
+            Some(cwd.join("sub/tools.mod"))
+        );
+        assert_eq!(
+            resolve_go_mod_from(cwd, Some("/abs/elsewhere"), Some("x.mod")),
+            Some(std::path::PathBuf::from("/abs/elsewhere/x.mod"))
+        );
+    }
+
+    #[test]
+    fn workspace_detection_follows_gowork() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        assert!(!in_workspace_with(None, base));
+        assert!(!in_workspace_with(Some("off"), base));
+        assert!(in_workspace_with(Some("/some/go.work"), base));
+        std::fs::write(base.join("go.work"), "go 1.22\n").expect("write");
+        assert!(in_workspace_with(None, &base.join("a/b")));
+        assert!(!in_workspace_with(Some("off"), base));
+    }
+
+    #[test]
+    fn chdir_with_an_absolute_path_is_a_flag_value() {
+        let args = s(&["-C", "/abs/dir", "-x"]);
+        let flags = go_flags(&args, &graph_values);
+        assert_eq!(flag_value(&flags.tokens, "C"), Some("/abs/dir"));
+        assert_eq!(flags.rest, 3);
     }
 
     #[test]

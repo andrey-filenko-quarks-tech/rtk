@@ -565,7 +565,7 @@ pub const RULES: &[RtkRule] = &[
             ("list", 65.0),
             ("mod tidy", 95.0),
             ("mod graph", 80.0),
-            ("generate", 60.0),
+            ("generate", 65.0),
         ],
         ..RtkRule::DEFAULT
     },

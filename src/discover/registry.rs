@@ -2545,9 +2545,11 @@ mod tests {
                 "rtk find",
                 "rtk git",
                 "rtk go",
+                "rtk go tool gotestsum",
                 "rtk go tool govulncheck",
                 "rtk go tool staticcheck",
                 "rtk golangci-lint run",
+                "rtk gotestsum",
                 "rtk govulncheck",
                 "rtk grep",
                 "rtk hadolint",
@@ -5328,6 +5330,23 @@ mod tests {
         let excluded = vec!["govulncheck".to_string()];
         assert_eq!(
             rewrite_command_no_prefixes("go tool govulncheck ./...", &excluded),
+            None
+        );
+    }
+
+    #[test]
+    fn test_rewrite_gotestsum() {
+        assert_eq!(
+            rewrite_command_no_prefixes("gotestsum -- ./...", &[]),
+            Some("rtk gotestsum -- ./...".into())
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool gotestsum -f dots", &[]),
+            Some("rtk go tool gotestsum -f dots".into())
+        );
+        let excluded = vec!["gotestsum".to_string()];
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool gotestsum", &excluded),
             None
         );
     }

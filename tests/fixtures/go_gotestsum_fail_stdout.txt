@@ -1,0 +1,12 @@
+✓  b (340ms)
+✖  a (597ms)
+
+=== Failed
+=== FAIL: a TestBad (0.00s)
+    a_test.go:7: some log line
+    a_test.go:8: want 1, got 2
+
+=== FAIL: a TestBad2 (0.00s)
+    a_test.go:10: boom
+
+DONE 7 tests, 2 failures in 0.597s

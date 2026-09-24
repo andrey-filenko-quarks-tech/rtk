@@ -8,6 +8,7 @@ use crate::core::tracking;
 use crate::core::truncate::CAP_ERRORS;
 use crate::core::utils::{resolved_command, truncate};
 use crate::golangci_cmd;
+use crate::gotestsum_cmd;
 use crate::govulncheck_cmd;
 use crate::staticcheck_cmd;
 use anyhow::{Context, Result};
@@ -136,6 +137,9 @@ pub fn run_other(args: &[OsString], verbose: u8) -> Result<i32> {
     if let Some((tool, tool_args)) = match_go_tool(args) {
         match tool {
             GoTool::GolangciLint => return run_go_tool_golangci_lint(tool_args, verbose),
+            GoTool::Gotestsum => {
+                return gotestsum_cmd::run_with(ToolBin::GoTool, &lossy_args(tool_args), verbose);
+            }
             GoTool::Govulncheck => {
                 return govulncheck_cmd::run_with(ToolBin::GoTool, &lossy_args(tool_args), verbose);
             }
@@ -209,6 +213,7 @@ fn has_golangci_format_flag(args: &[OsString]) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum GoTool {
     GolangciLint,
+    Gotestsum,
     Govulncheck,
     Staticcheck,
 }
@@ -217,6 +222,7 @@ impl GoTool {
     fn from_name(name: &str) -> Option<Self> {
         match name {
             "golangci-lint" => Some(Self::GolangciLint),
+            "gotestsum" => Some(Self::Gotestsum),
             "govulncheck" => Some(Self::Govulncheck),
             "staticcheck" => Some(Self::Staticcheck),
             _ => None,
@@ -1131,6 +1137,23 @@ utils.go:15:5: unreachable code"#;
         let (tool, _) =
             match_go_tool(&os(&["tool", "govulncheck", "./..."])).expect("should match");
         assert_eq!(tool, GoTool::Govulncheck);
+    }
+
+    #[test]
+    fn go_tool_args_keep_dashdash() {
+        let args = os(&[
+            "tool",
+            "gotestsum",
+            "-f",
+            "dots",
+            "--",
+            "-run",
+            "X",
+            "./...",
+        ]);
+        let (tool, rest) = match_go_tool(&args).expect("should match");
+        assert_eq!(tool, GoTool::Gotestsum);
+        assert_eq!(lossy_args(rest), ["-f", "dots", "--", "-run", "X", "./..."]);
     }
 
     #[test]

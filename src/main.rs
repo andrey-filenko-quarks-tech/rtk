@@ -10,7 +10,7 @@ mod parser;
 use cmds::cloud::{aws_cmd, container, curl_cmd, psql_cmd, wget_cmd};
 use cmds::dotnet::{binlog, dotnet_cmd, dotnet_format_report, dotnet_trx};
 use cmds::git::{diff_cmd, gh_cmd, git_cmd, glab_cmd, gt_cmd};
-use cmds::go::{go_cmd, golangci_cmd, govulncheck_cmd, staticcheck_cmd};
+use cmds::go::{go_cmd, golangci_cmd, gotestsum_cmd, govulncheck_cmd, staticcheck_cmd};
 use cmds::js::{
     bun_cmd, deno_cmd, lint_cmd, next_cmd, npm_cmd, playwright_cmd, pnpm_cmd, prettier_cmd,
     prisma_cmd, tsc_cmd, vitest_cmd,
@@ -914,6 +914,14 @@ enum Commands {
     #[command(name = "golangci-lint")]
     GolangciLint {
         /// Additional golangci-lint arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// gotestsum rendered as rtk's go test view
+    #[command(disable_help_flag = true)]
+    Gotestsum {
+        /// gotestsum arguments
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -2893,6 +2901,8 @@ fn run_cli() -> Result<i32> {
 
         Commands::GolangciLint { args } => golangci_cmd::run(&args, cli.verbose)?,
 
+        Commands::Gotestsum { args } => gotestsum_cmd::run(&args, cli.verbose)?,
+
         Commands::Govulncheck { args } => govulncheck_cmd::run(&args, cli.verbose)?,
 
         Commands::Staticcheck { args } => staticcheck_cmd::run(&args, cli.verbose)?,
@@ -3310,6 +3320,7 @@ fn is_operational_command(cmd: &Commands) -> bool {
             | Commands::Go { .. }
             | Commands::Sbt { .. }
             | Commands::GolangciLint { .. }
+            | Commands::Gotestsum { .. }
             | Commands::Govulncheck { .. }
             | Commands::Staticcheck { .. }
             | Commands::Gt { .. }
@@ -3853,6 +3864,7 @@ mod tests {
             "go",
             "gt",
             "golangci-lint",
+            "gotestsum",
             "govulncheck",
             "staticcheck",
             "gradlew",

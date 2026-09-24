@@ -1529,7 +1529,20 @@ fn search_uses_pattern_file(cmd: &str) -> bool {
 }
 
 fn pipeline_command_is_safe(rtk_cmd: &str, cmd: &str) -> bool {
-    !matches!(rtk_cmd, "rtk grep" | "rtk rg") || !search_uses_pattern_file(cmd)
+    match rtk_cmd {
+        "rtk grep" | "rtk rg" => !search_uses_pattern_file(cmd),
+        // `go list` and `go mod graph` print data the next stage consumes; a summary breaks it.
+        "rtk go" => !go_prints_data(cmd),
+        _ => true,
+    }
+}
+
+fn go_prints_data(cmd: &str) -> bool {
+    let words: Vec<&str> = cmd
+        .split_whitespace()
+        .skip_while(|w| w.contains('='))
+        .collect();
+    matches!(words.as_slice(), [_, "list", ..] | [_, "mod", "graph", ..])
 }
 
 pub(crate) enum ExcludePattern {
@@ -5278,6 +5291,47 @@ mod tests {
         assert_eq!(
             rewrite_command_no_prefixes("go vet ./...", &[]),
             Some("rtk go vet ./...".into())
+        );
+    }
+
+    #[test]
+    fn test_rewrite_go_subcommands() {
+        for (cmd, want) in [
+            ("go list ./...", "rtk go list ./..."),
+            ("go mod tidy", "rtk go mod tidy"),
+            ("go mod graph", "rtk go mod graph"),
+            ("go generate ./...", "rtk go generate ./..."),
+        ] {
+            assert_eq!(
+                rewrite_command_no_prefixes(cmd, &[]),
+                Some(want.into()),
+                "{cmd}"
+            );
+        }
+        assert_eq!(rewrite_command_no_prefixes("go mod why x", &[]), None);
+    }
+
+    #[test]
+    fn test_go_data_commands_stay_raw_in_pipelines() {
+        // The producer stays raw; a final stage keeps its own rewrite rule (e.g. `rtk grep`).
+        for cmd in [
+            "go list ./... | grep internal",
+            "go mod graph | grep x/net",
+            "go list ./... | wc -l",
+        ] {
+            let rewritten = rewrite_command_no_prefixes(cmd, &[]);
+            assert!(
+                rewritten.as_deref().is_none_or(|r| r.starts_with("go ")),
+                "{cmd} → {rewritten:?}"
+            );
+        }
+        assert_eq!(
+            rewrite_command_no_prefixes("go test ./... | tail -5", &[]),
+            Some("rtk go test ./... | tail -5".into())
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("go test $(go list ./...)", &[]),
+            Some("rtk go test $(go list ./...)".into())
         );
     }
 

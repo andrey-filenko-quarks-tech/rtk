@@ -1,0 +1,29 @@
+  • skipping validate...
+  • cleaning distribution directory
+  • loading environment variables
+  • getting and validating git state
+    • ignoring errors because this is a snapshot     error=couldn't get remote URL: fatal: No remote configured to list refs from.
+    • using tags                                     previous=<unknown> current=v0.0.0
+    • pipe skipped or partially skipped              reason=disabled during snapshot mode
+  • parsing tag
+  • setting defaults
+  • partial
+  • snapshotting
+    • building snapshot...                           version=0.0.0-SNAPSHOT-none
+  • running before hooks
+    • running                                        hook=go mod tidy
+    • running                                        hook=go generate ./...
+  • ensuring distribution directory
+  • setting up metadata
+  • writing release metadata
+  • loading go mod information
+  • build prerequisites
+  • building binaries
+    • partial build                                  match=target=darwin_arm64_v8.0
+    • finding all  func main()  id=rel path=./...
+    • building                                       paths=[.] binaries=[rel] target=darwin_arm64_v8.0
+  ⨯ build failed after 0s                           
+    error=
+    │ build failed: exit status 1: # example.com/rel
+    │ ./main.go:3:15: undefined: undefinedFoo
+    target=darwin_arm64_v8.0

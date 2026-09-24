@@ -1,0 +1,16 @@
+  • starting release
+  • skipping announce, publish, and validate...
+  • cleaning distribution directory
+  • loading environment variables
+  • getting and validating git state
+    • ignoring errors because this is a snapshot     error=couldn't get remote URL: fatal: No remote configured to list refs from.
+    • using tags                                     previous=<unknown> current=v0.0.0
+    • pipe skipped or partially skipped              reason=disabled during snapshot mode
+  • parsing tag
+  • setting defaults
+  • snapshotting
+    • building snapshot...                           version=0.0.0-SNAPSHOT-none
+  • running before hooks
+    • running                                        hook=go mod tidy
+    • running                                        hook=false-no-such-cmd
+  ⨯ release failed after 0s                          error=exec: "false-no-such-cmd": executable file not found in $PATH message=hook failed: command failed cmd=false-no-such-cmd

@@ -154,7 +154,9 @@ An entry names a tool RTK has a filter for, and covers the wrapper, interpreter 
 of it. Before matching, RTK peels those off the command and matches what is left, so
 `"playwright"` excludes `playwright test`, `npx playwright test` and `pnpm exec playwright test`
 alike; `"pytest"` also covers `python3 -m pytest tests/`, and `"phpunit"` covers
-`vendor/bin/phpunit` and `php vendor/bin/phpunit`.
+`vendor/bin/phpunit` and `php vendor/bin/phpunit`. The Go tools rtk also runs through `go tool`
+are covered the same way: `"staticcheck"` excludes `go tool staticcheck ./...` too (likewise
+`govulncheck`, `gotestsum` and `goreleaser`).
 
 Four spellings are not peeled yet, and still rewrite despite a matching entry:
 

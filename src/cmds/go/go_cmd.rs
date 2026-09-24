@@ -1,6 +1,7 @@
 //! Filters Go command output — test results, build errors, vet warnings.
 
 use crate::buf_cmd::{self, BufBin};
+use crate::cmds::go::go_tool::ToolBin;
 use crate::core::guard::never_worse;
 use crate::core::runner;
 use crate::core::stream::{CaptureResult, exec_capture};
@@ -8,6 +9,10 @@ use crate::core::tracking;
 use crate::core::truncate::CAP_ERRORS;
 use crate::core::utils::{resolved_command, truncate};
 use crate::golangci_cmd;
+use crate::goreleaser_cmd;
+use crate::gotestsum_cmd;
+use crate::govulncheck_cmd;
+use crate::staticcheck_cmd;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -143,6 +148,18 @@ pub fn run_other(args: &[OsString], verbose: u8) -> Result<i32> {
                     .collect();
                 return buf_cmd::run_with(BufBin::GoTool, &args, verbose);
             }
+            GoTool::Goreleaser => {
+                return goreleaser_cmd::run_with(ToolBin::GoTool, &lossy_args(tool_args), verbose);
+            }
+            GoTool::Gotestsum => {
+                return gotestsum_cmd::run_with(ToolBin::GoTool, &lossy_args(tool_args), verbose);
+            }
+            GoTool::Govulncheck => {
+                return govulncheck_cmd::run_with(ToolBin::GoTool, &lossy_args(tool_args), verbose);
+            }
+            GoTool::Staticcheck => {
+                return staticcheck_cmd::run_with(ToolBin::GoTool, &lossy_args(tool_args), verbose);
+            }
         }
     }
 
@@ -211,6 +228,10 @@ fn has_golangci_format_flag(args: &[OsString]) -> bool {
 enum GoTool {
     GolangciLint,
     Buf,
+    Goreleaser,
+    Gotestsum,
+    Govulncheck,
+    Staticcheck,
 }
 
 impl GoTool {
@@ -218,6 +239,10 @@ impl GoTool {
         match name {
             "golangci-lint" => Some(Self::GolangciLint),
             "buf" => Some(Self::Buf),
+            "goreleaser" => Some(Self::Goreleaser),
+            "gotestsum" => Some(Self::Gotestsum),
+            "govulncheck" => Some(Self::Govulncheck),
+            "staticcheck" => Some(Self::Staticcheck),
             _ => None,
         }
     }
@@ -232,6 +257,14 @@ fn match_go_tool(args: &[OsString]) -> Option<(GoTool, &[OsString])> {
         return Some((tool, &args[2..]));
     }
     None
+}
+
+/// Lossy: the tools' own flags are ASCII; a non-UTF-8 argument has its invalid bytes replaced
+/// with U+FFFD on every path, passthrough included.
+fn lossy_args(args: &[OsString]) -> Vec<String> {
+    args.iter()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect()
 }
 
 /// Run `go tool golangci-lint` and filter its output via the golangci JSON filter.
@@ -1123,6 +1156,38 @@ utils.go:15:5: unreachable code"#;
         let args = os(&["tool", "buf", "lint", "--", "--error-format=json"]);
         let (_, rest) = match_go_tool(&args).expect("should match");
         assert_eq!(rest, &os(&["lint", "--", "--error-format=json"])[..]);
+    }
+
+    #[test]
+    fn test_match_go_tool_staticcheck() {
+        let args = os(&["tool", "staticcheck", "./..."]);
+        let (tool, rest) = match_go_tool(&args).expect("should match");
+        assert_eq!(tool, GoTool::Staticcheck);
+        assert_eq!(rest, &os(&["./..."])[..]);
+    }
+
+    #[test]
+    fn test_match_go_tool_govulncheck() {
+        let (tool, _) =
+            match_go_tool(&os(&["tool", "govulncheck", "./..."])).expect("should match");
+        assert_eq!(tool, GoTool::Govulncheck);
+    }
+
+    #[test]
+    fn go_tool_args_keep_dashdash() {
+        let args = os(&[
+            "tool",
+            "gotestsum",
+            "-f",
+            "dots",
+            "--",
+            "-run",
+            "X",
+            "./...",
+        ]);
+        let (tool, rest) = match_go_tool(&args).expect("should match");
+        assert_eq!(tool, GoTool::Gotestsum);
+        assert_eq!(lossy_args(rest), ["-f", "dots", "--", "-run", "X", "./..."]);
     }
 
     #[test]

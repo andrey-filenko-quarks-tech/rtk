@@ -846,6 +846,58 @@ rtk go generate ./...          # "ok" en cas de succes, fin de sortie en cas d'e
 
 ---
 
+### `rtk staticcheck` -- Analyse statique Go
+
+```bash
+rtk staticcheck ./...
+```
+
+Regroupe les resultats par check (erreurs de compilation en premier), 5 emplacements par check.
+
+---
+
+### `rtk govulncheck` -- Vulnerabilites Go
+
+```bash
+rtk govulncheck ./...
+```
+
+Regroupe les vulnerabilites appelees par module, avec la version corrigee la plus haute.
+
+---
+
+### `rtk gotestsum` -- Tests Go via gotestsum
+
+```bash
+rtk gotestsum [-- args go test]
+```
+
+Meme vue que `rtk go test`. Les formats verbeux et `-v` passent tels quels.
+
+---
+
+### `rtk goreleaser` -- Release Go
+
+```bash
+rtk goreleaser release --snapshot --clean
+rtk goreleaser build
+```
+
+Resultat, compteurs et artefacts ; en cas d'echec, l'etape et la ligne d'erreur.
+
+---
+
+### `rtk gofmt` / `rtk goimports` -- Formatage Go
+
+```bash
+rtk gofmt -l .
+rtk goimports -d main.go
+```
+
+`-l` garde les lignes de l'outil (liste longue tronquee avec rappel) ; `-d` resume par fichier.
+
+---
+
 ## Commandes Formatage
 
 ### `rtk prettier` -- Prettier
@@ -1343,6 +1395,11 @@ rtk verify
 | `go test/build/vet/list/mod tidy/mod graph/generate` | `rtk go ...` |
 | `golangci-lint` | `rtk golangci-lint` |
 | `buf lint/build/breaking/format/generate` | `rtk buf ...` |
+| `staticcheck` / `go tool staticcheck` | `rtk staticcheck` / `rtk go tool staticcheck` |
+| `govulncheck` / `go tool govulncheck` | `rtk govulncheck` / `rtk go tool govulncheck` |
+| `gotestsum` / `go tool gotestsum` | `rtk gotestsum` / `rtk go tool gotestsum` |
+| `goreleaser release/build` | `rtk goreleaser ...` |
+| `gofmt` / `goimports` (hors pipeline) | `rtk gofmt` / `rtk goimports` |
 | `docker ps/images/logs` | `rtk docker ...` |
 | `kubectl get/logs` | `rtk kubectl ...` |
 | `curl` | `rtk curl` |

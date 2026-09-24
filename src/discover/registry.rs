@@ -2561,7 +2561,14 @@ mod tests {
                 "rtk git",
                 "rtk go",
                 "rtk go tool buf",
+                "rtk go tool goreleaser",
+                "rtk go tool gotestsum",
+                "rtk go tool govulncheck",
+                "rtk go tool staticcheck",
                 "rtk golangci-lint run",
+                "rtk goreleaser",
+                "rtk gotestsum",
+                "rtk govulncheck",
                 "rtk grep",
                 "rtk hadolint",
                 "rtk helm",
@@ -2594,6 +2601,7 @@ mod tests {
                 "rtk ruff",
                 "rtk shellcheck",
                 "rtk shopify",
+                "rtk staticcheck",
                 "rtk swift",
                 "rtk systemctl",
                 "rtk terraform",
@@ -5325,6 +5333,18 @@ mod tests {
     }
 
     #[test]
+    fn test_rewrite_staticcheck() {
+        assert_eq!(
+            rewrite_command_no_prefixes("staticcheck ./...", &[]),
+            Some("rtk staticcheck ./...".into())
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool staticcheck ./...", &[]),
+            Some("rtk go tool staticcheck ./...".into())
+        );
+    }
+
+    #[test]
     fn test_go_data_commands_stay_raw_in_pipelines() {
         // The producer stays raw; a final stage keeps its own rewrite rule (e.g. `rtk grep`).
         for cmd in [
@@ -5346,6 +5366,101 @@ mod tests {
             rewrite_command_no_prefixes("go test $(go list ./...)", &[]),
             Some("rtk go test $(go list ./...)".into())
         );
+    }
+
+    #[test]
+    fn test_exclude_staticcheck_covers_go_tool_spelling() {
+        let excluded = vec!["staticcheck".to_string()];
+        assert_eq!(
+            rewrite_command_no_prefixes("staticcheck ./...", &excluded),
+            None
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool staticcheck ./...", &excluded),
+            None
+        );
+        // The `go tool` rule's second prefix never captures a bare invocation.
+        assert_eq!(
+            rewrite_command_no_prefixes("staticcheck ./...", &["go tool staticcheck".to_string()]),
+            Some("rtk staticcheck ./...".into())
+        );
+    }
+
+    #[test]
+    fn test_rewrite_govulncheck() {
+        assert_eq!(
+            rewrite_command_no_prefixes("govulncheck ./...", &[]),
+            Some("rtk govulncheck ./...".into())
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool govulncheck ./...", &[]),
+            Some("rtk go tool govulncheck ./...".into())
+        );
+        let excluded = vec!["govulncheck".to_string()];
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool govulncheck ./...", &excluded),
+            None
+        );
+    }
+
+    #[test]
+    fn test_rewrite_gotestsum() {
+        assert_eq!(
+            rewrite_command_no_prefixes("gotestsum -- ./...", &[]),
+            Some("rtk gotestsum -- ./...".into())
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool gotestsum -f dots", &[]),
+            Some("rtk go tool gotestsum -f dots".into())
+        );
+        let excluded = vec!["gotestsum".to_string()];
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool gotestsum", &excluded),
+            None
+        );
+    }
+
+    #[test]
+    fn test_rewrite_goreleaser() {
+        assert_eq!(
+            rewrite_command_no_prefixes("goreleaser release --snapshot --clean", &[]),
+            Some("rtk goreleaser release --snapshot --clean".into())
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool goreleaser build --single-target", &[]),
+            Some("rtk go tool goreleaser build --single-target".into())
+        );
+        assert_eq!(rewrite_command_no_prefixes("goreleaser check", &[]), None);
+        let excluded = vec!["goreleaser".to_string()];
+        assert_eq!(
+            rewrite_command_no_prefixes("go tool goreleaser release", &excluded),
+            None
+        );
+    }
+
+    #[test]
+    fn test_rewrite_gofmt_and_goimports() {
+        assert_eq!(
+            rewrite_command_no_prefixes("gofmt -l .", &[]),
+            Some("rtk gofmt -l .".into())
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("goimports -d main.go", &[]),
+            Some("rtk goimports -d main.go".into())
+        );
+    }
+
+    #[test]
+    fn test_gofmt_lists_stay_raw_in_pipelines() {
+        for cmd in ["gofmt -l . | xargs gofmt -w", "goimports -l . | wc -l"] {
+            let rewritten = rewrite_command_no_prefixes(cmd, &[]);
+            assert!(
+                rewritten
+                    .as_deref()
+                    .is_none_or(|r| !r.starts_with("rtk gofmt") && !r.starts_with("rtk goimports")),
+                "{cmd} → {rewritten:?}"
+            );
+        }
     }
 
     #[test]

@@ -607,6 +607,105 @@ pub const RULES: &[RtkRule] = &[
         savings_pct: 75.0,
         ..RtkRule::DEFAULT
     },
+    RtkRule {
+        pattern: r"^staticcheck(?:\s|$)",
+        rtk_cmd: "rtk staticcheck",
+        pipeline_safety: PipelineSafety::ProducerOnly,
+        rewrite_prefixes: &["staticcheck"],
+        category: "Go",
+        savings_pct: 90.0,
+        ..RtkRule::DEFAULT
+    },
+    // The second prefix is read only by `exclude_commands` peeling, so a `"staticcheck"`
+    // entry also covers this spelling; the pattern keeps bare `staticcheck` out.
+    RtkRule {
+        pattern: r"^go\s+tool\s+staticcheck(?:\s|$)",
+        rtk_cmd: "rtk go tool staticcheck",
+        pipeline_safety: PipelineSafety::ProducerOnly,
+        rewrite_prefixes: &["go tool staticcheck", "staticcheck"],
+        category: "Go",
+        savings_pct: 90.0,
+        ..RtkRule::DEFAULT
+    },
+    RtkRule {
+        pattern: r"^govulncheck(?:\s|$)",
+        rtk_cmd: "rtk govulncheck",
+        pipeline_safety: PipelineSafety::ProducerOnly,
+        rewrite_prefixes: &["govulncheck"],
+        category: "Go",
+        savings_pct: 90.0,
+        ..RtkRule::DEFAULT
+    },
+    // The second prefix is read only by `exclude_commands` peeling, so a `"govulncheck"`
+    // entry also covers this spelling; the pattern keeps bare `govulncheck` out.
+    RtkRule {
+        pattern: r"^go\s+tool\s+govulncheck(?:\s|$)",
+        rtk_cmd: "rtk go tool govulncheck",
+        pipeline_safety: PipelineSafety::ProducerOnly,
+        rewrite_prefixes: &["go tool govulncheck", "govulncheck"],
+        category: "Go",
+        savings_pct: 90.0,
+        ..RtkRule::DEFAULT
+    },
+    RtkRule {
+        pattern: r"^gotestsum(?:\s|$)",
+        rtk_cmd: "rtk gotestsum",
+        pipeline_safety: PipelineSafety::ProducerOnly,
+        rewrite_prefixes: &["gotestsum"],
+        category: "Go",
+        savings_pct: 80.0,
+        ..RtkRule::DEFAULT
+    },
+    // The second prefix is read only by `exclude_commands` peeling, so a `"gotestsum"`
+    // entry also covers this spelling; the pattern keeps bare `gotestsum` out.
+    RtkRule {
+        pattern: r"^go\s+tool\s+gotestsum(?:\s|$)",
+        rtk_cmd: "rtk go tool gotestsum",
+        pipeline_safety: PipelineSafety::ProducerOnly,
+        rewrite_prefixes: &["go tool gotestsum", "gotestsum"],
+        category: "Go",
+        savings_pct: 80.0,
+        ..RtkRule::DEFAULT
+    },
+    RtkRule {
+        pattern: r"^goreleaser\s+(release|build)(?:\s|$)",
+        rtk_cmd: "rtk goreleaser",
+        pipeline_safety: PipelineSafety::ProducerOnly,
+        rewrite_prefixes: &["goreleaser"],
+        category: "Go",
+        savings_pct: 85.0,
+        subcmd_savings: &[("release", 85.0), ("build", 80.0)],
+        ..RtkRule::DEFAULT
+    },
+    // No subcmd_savings: the telemetry label for `rtk go tool goreleaser release` is
+    // `rtk go tool`. The second prefix is read only by `exclude_commands` peeling.
+    RtkRule {
+        pattern: r"^go\s+tool\s+goreleaser\s+(release|build)(?:\s|$)",
+        rtk_cmd: "rtk go tool goreleaser",
+        pipeline_safety: PipelineSafety::ProducerOnly,
+        rewrite_prefixes: &["go tool goreleaser", "goreleaser"],
+        category: "Go",
+        savings_pct: 85.0,
+        ..RtkRule::DEFAULT
+    },
+    // Not pipeline-safe: `gofmt -l . | xargs …` consumes the file list, and a capped list
+    // would silently drop files from the next stage.
+    RtkRule {
+        pattern: r"^gofmt\s",
+        rtk_cmd: "rtk gofmt",
+        rewrite_prefixes: &["gofmt"],
+        category: "Go",
+        savings_pct: 60.0,
+        ..RtkRule::DEFAULT
+    },
+    RtkRule {
+        pattern: r"^goimports\s",
+        rtk_cmd: "rtk goimports",
+        rewrite_prefixes: &["goimports"],
+        category: "Go",
+        savings_pct: 60.0,
+        ..RtkRule::DEFAULT
+    },
     // Scala/SBT
     RtkRule {
         pattern: r#"^sbt\s+["']?(testOnly|testQuick|test|compile|run|clean|assembly|package)(?:[\s"']|$)"#,

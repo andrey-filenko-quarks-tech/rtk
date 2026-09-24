@@ -83,6 +83,11 @@ Every percentage below measures **bash output bytes removed** — the only thing
 | `buf lint` / `build` / `breaking` | 85-90% | Diagnostics grouped by rule, compile cascades collapsed |
 | `buf format -d` | 90% | One line per file with +/- counts |
 | `buf generate` (failure) | 75% | Plugin panic cut after its first frame, `Failure:` line kept |
+| `staticcheck` | 95-99% | Findings grouped by check, 5 locations each |
+| `govulncheck` | 90% | Grouped by module with the fix version |
+| `gotestsum` | 70% | Same view as `go test` (compact formats) |
+| `goreleaser release/build` | 85% | Outcome, counts, artifacts; errors on failure |
+| `gofmt` / `goimports` | 0-80% | `-l`: long lists capped with recall; `-d`: one line per file |
 | `go build` | 75% | Errors only |
 | `go mod graph` | 80% | Counts, direct requirements, version conflicts |
 | `go mod tidy` | 95% | Download chatter dropped; go.mod changes listed |

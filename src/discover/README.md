@@ -107,7 +107,7 @@ command.
 Add an entry to `rules.rs`. Each rule has:
 - `pattern` — regex that matches the command (used by `RegexSet` for fast matching)
 - `rtk_cmd` — the RTK command it maps to (e.g., `"rtk cargo"`)
-- `rewrite_prefixes` — command prefixes to replace (e.g., `&["cargo"]`)
+- `rewrite_prefixes` — command prefixes to replace (e.g., `&["cargo"]`), longest first. A shorter entry that is the tail of a longer one (`&["npx playwright", "playwright"]`, `&["go tool staticcheck", "staticcheck"]`) is also what an `exclude_commands` entry names: exclusion peels the command down to it, so `"staticcheck"` covers `go tool staticcheck`. When the rule's `pattern` never matches the bare form, that entry is read only by exclusion.
 - `category`, `savings_pct` — metadata for discover reports
 - `subcmd_savings`, `subcmd_status` — per-subcommand overrides
 

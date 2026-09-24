@@ -240,6 +240,11 @@ rtk go mod tidy                 # go.mod changes (+/-/~), download chatter dropp
 rtk go list ./...               # Package list with the module path printed once
 rtk go list -m -u all           # Only direct modules with available updates
 rtk go generate ./...           # "ok" on success, the failing tail otherwise
+rtk staticcheck ./...           # Findings grouped by check (JSON, -99%)
+rtk govulncheck ./...           # Vulnerabilities grouped by module (-90%)
+rtk gotestsum                   # Same view as rtk go test
+rtk goreleaser release          # Outcome + artifacts, errors on failure (-85%)
+rtk gofmt -l .                  # File list capped with recall; -d per file
 rtk rubocop                     # Ruby linting (JSON, -60%+)
 rtk mvnd verify                 # Maven Daemon (same filters as rtk mvn)
 rtk sbt test                    # ScalaTest output (-90%)

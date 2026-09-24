@@ -1,0 +1,93 @@
+=== Symbol Results ===
+
+Vulnerability #1: GO-2026-5030
+    Invoking duplicate attributes can cause XSS in golang.org/x/net/html
+  More info: https://pkg.go.dev/vuln/GO-2026-5030
+  Module: golang.org/x/net
+    Found in: golang.org/x/net@v0.0.0-20220127200216-cd36cc0744dd
+    Fixed in: golang.org/x/net@v0.55.0
+    Example traces found:
+      #1: main.go:12:20: vuln.main calls html.Parse
+
+Vulnerability #2: GO-2026-5029
+    Invoking incorrect handling of character references in DOCTYPE nodes in
+    golang.org/x/net/html
+  More info: https://pkg.go.dev/vuln/GO-2026-5029
+  Module: golang.org/x/net
+    Found in: golang.org/x/net@v0.0.0-20220127200216-cd36cc0744dd
+    Fixed in: golang.org/x/net@v0.55.0
+    Example traces found:
+      #1: main.go:12:20: vuln.main calls html.Parse
+
+Vulnerability #3: GO-2026-5028
+    Invoking denial of service when parsing arbitrary HTML in
+    golang.org/x/net/html
+  More info: https://pkg.go.dev/vuln/GO-2026-5028
+  Module: golang.org/x/net
+    Found in: golang.org/x/net@v0.0.0-20220127200216-cd36cc0744dd
+    Fixed in: golang.org/x/net@v0.55.0
+    Example traces found:
+      #1: main.go:12:20: vuln.main calls html.Parse
+
+Vulnerability #4: GO-2026-5027
+    Invoking incorrect handling of HTML elements in foreign content in
+    golang.org/x/net/html
+  More info: https://pkg.go.dev/vuln/GO-2026-5027
+  Module: golang.org/x/net
+    Found in: golang.org/x/net@v0.0.0-20220127200216-cd36cc0744dd
+    Fixed in: golang.org/x/net@v0.55.0
+    Example traces found:
+      #1: main.go:12:20: vuln.main calls html.Parse
+
+Vulnerability #5: GO-2026-5025
+    Invoking incorrect handling of namespaced elements in foreign content in
+    golang.org/x/net/html
+  More info: https://pkg.go.dev/vuln/GO-2026-5025
+  Module: golang.org/x/net
+    Found in: golang.org/x/net@v0.0.0-20220127200216-cd36cc0744dd
+    Fixed in: golang.org/x/net@v0.55.0
+    Example traces found:
+      #1: main.go:12:20: vuln.main calls html.Parse
+
+Vulnerability #6: GO-2026-4441
+    Infinite parsing loop in golang.org/x/net
+  More info: https://pkg.go.dev/vuln/GO-2026-4441
+  Module: golang.org/x/net
+    Found in: golang.org/x/net@v0.0.0-20220127200216-cd36cc0744dd
+    Fixed in: golang.org/x/net@v0.45.0
+    Example traces found:
+      #1: main.go:12:20: vuln.main calls html.Parse
+
+Vulnerability #7: GO-2026-4440
+    Quadratic parsing complexity in golang.org/x/net/html
+  More info: https://pkg.go.dev/vuln/GO-2026-4440
+  Module: golang.org/x/net
+    Found in: golang.org/x/net@v0.0.0-20220127200216-cd36cc0744dd
+    Fixed in: golang.org/x/net@v0.45.0
+    Example traces found:
+      #1: main.go:12:20: vuln.main calls html.Parse
+
+Vulnerability #8: GO-2025-3595
+    Incorrect Neutralization of Input During Web Page Generation in x/net in
+    golang.org/x/net
+  More info: https://pkg.go.dev/vuln/GO-2025-3595
+  Module: golang.org/x/net
+    Found in: golang.org/x/net@v0.0.0-20220127200216-cd36cc0744dd
+    Fixed in: golang.org/x/net@v0.38.0
+    Example traces found:
+      #1: main.go:12:20: vuln.main calls html.Parse
+
+Vulnerability #9: GO-2024-3333
+    Non-linear parsing of case-insensitive content in golang.org/x/net/html
+  More info: https://pkg.go.dev/vuln/GO-2024-3333
+  Module: golang.org/x/net
+    Found in: golang.org/x/net@v0.0.0-20220127200216-cd36cc0744dd
+    Fixed in: golang.org/x/net@v0.33.0
+    Example traces found:
+      #1: main.go:12:20: vuln.main calls html.Parse
+
+Your code is affected by 9 vulnerabilities from 1 module.
+This scan also found 2 vulnerabilities in packages you import and 10
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+Use '-show verbose' for more details.

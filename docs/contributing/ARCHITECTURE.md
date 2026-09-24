@@ -168,7 +168,7 @@ Savings by ecosystem:
   GIT (cmds/git/)          85-99%    status, diff, log, gh, gt
   JS/TS (cmds/js/)         70-99%    lint, tsc, next, prettier, playwright, prisma, vitest, pnpm
   PYTHON (cmds/python/)    70-90%    ruff, pytest, mypy, pip
-  GO (cmds/go/)            65-95%    go test/build/vet/mod/list/generate, golangci-lint, buf
+  GO (cmds/go/)            65-99%    go test/build/vet/mod/list/generate, golangci-lint, buf, staticcheck, govulncheck, gotestsum, goreleaser, gofmt/goimports
   RUBY (cmds/ruby/)        60-90%    rake, rspec, rubocop
   DOTNET (cmds/dotnet/)    70-85%    dotnet build/test, binlog
   CLOUD (cmds/cloud/)      60-80%    aws, docker/kubectl, curl, wget, psql
@@ -192,7 +192,7 @@ Savings by ecosystem:
 - **Git Commands**: 7 operations (status, diff, log, add, commit, push, branch/checkout)
 - **JS/TS Tooling**: 8 modules (modern frontend/fullstack development)
 - **Python Tooling**: 3 modules (ruff, pytest, pip)
-- **Go Tooling**: 6 modules (go test/build/vet, go mod, go list, go generate, golangci-lint, buf)
+- **Go Tooling**: go test/build/vet, go mod, go list, go generate, golangci-lint, and standalone Go tools (buf, staticcheck, govulncheck, gotestsum, goreleaser, gofmt/goimports)
 
 ---
 
@@ -357,14 +357,16 @@ Commands::Pip { args }                 Build { args },
                                        Generate { args }
                                      }
 ├─ ruff_cmd.rs                       Commands::GolangciLint { args }
-├─ pytest_cmd.rs                     Commands::Buf { args }
+├─ pytest_cmd.rs                     Commands::Buf/Staticcheck/Govulncheck/
+└─ pip_cmd.rs                          Gotestsum/Goreleaser/Gofmt/Goimports
                                      │
-└─ pip_cmd.rs                        ├─ go_cmd.rs (sub-enum router)
+                                     ├─ go_cmd.rs (sub-enum router)
                                      ├─ go_mod_cmd.rs
                                      ├─ go_list_cmd.rs
                                      ├─ go_generate_cmd.rs
                                      ├─ golangci_cmd.rs
-                                     └─ buf_cmd.rs
+                                     ├─ buf_cmd.rs
+                                     └─ <tool>_cmd.rs (+ go_tool.rs ToolBin)
 
 Mirrors: lint, prettier              Mirrors: git, cargo
 ```
@@ -495,7 +497,14 @@ go_generate_cmd.rs TEXT FILTERING       Combined stream    65-99%
   success → "go generate: ok"; failure → tail with Go's `running "…"` verdict
 
 Helpers (no command of their own): go_args.rs (Go flag rules), go_modfile.rs (go.mod,
--C/-modfile/GOFLAGS, workspaces), go_run.rs (passthrough, recall hint).
+-C/-modfile/GOFLAGS, workspaces), go_run.rs (passthrough, recall hint), go_tool.rs (direct
+binary or `go tool`).
+
+staticcheck_cmd.rs  JSON PARSING    -f json injected, grouped by check      99%
+govulncheck_cmd.rs  TEXT PARSING    grouped by module, highest fix version  90%
+gotestsum_cmd.rs    JSON FILE       --jsonfile events → go test view        70%
+goreleaser_cmd.rs   LOG SUMMARY     outcome, counts, artifacts; ⨯ lines     85%
+gofmt_cmd.rs        LIST / DIFF     -l list capped; -d one line per file    0-80%
 ```
 
 #### Sub-Enum Pattern (go_cmd.rs)

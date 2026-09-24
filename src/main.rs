@@ -10,7 +10,10 @@ mod parser;
 use cmds::cloud::{aws_cmd, container, curl_cmd, psql_cmd, wget_cmd};
 use cmds::dotnet::{binlog, dotnet_cmd, dotnet_format_report, dotnet_trx};
 use cmds::git::{diff_cmd, gh_cmd, git_cmd, glab_cmd, gt_cmd};
-use cmds::go::{buf_cmd, go_cmd, go_generate_cmd, go_list_cmd, go_mod_cmd, golangci_cmd};
+use cmds::go::{
+    buf_cmd, go_cmd, go_generate_cmd, go_list_cmd, go_mod_cmd, gofmt_cmd, golangci_cmd,
+    goreleaser_cmd, gotestsum_cmd, govulncheck_cmd, staticcheck_cmd,
+};
 use cmds::js::{
     bun_cmd, deno_cmd, lint_cmd, next_cmd, npm_cmd, playwright_cmd, pnpm_cmd, prettier_cmd,
     prisma_cmd, tsc_cmd, vitest_cmd,
@@ -921,6 +924,54 @@ enum Commands {
     #[command(name = "golangci-lint")]
     GolangciLint {
         /// Additional golangci-lint arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// gofmt: -l list capped with recall, -d summarised per file
+    #[command(disable_help_flag = true)]
+    Gofmt {
+        /// gofmt arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// goimports: -l list capped with recall, -d summarised per file
+    #[command(disable_help_flag = true)]
+    Goimports {
+        /// goimports arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// goreleaser release/build summarised: outcome, artifacts, errors
+    #[command(disable_help_flag = true)]
+    Goreleaser {
+        /// goreleaser subcommand and arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// gotestsum rendered as rtk's go test view
+    #[command(disable_help_flag = true)]
+    Gotestsum {
+        /// gotestsum arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// govulncheck grouped by module with the fix version
+    #[command(disable_help_flag = true)]
+    Govulncheck {
+        /// govulncheck arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// staticcheck with findings grouped by check
+    #[command(disable_help_flag = true)]
+    Staticcheck {
+        /// staticcheck arguments
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -2910,6 +2961,20 @@ fn run_cli() -> Result<i32> {
 
         Commands::GolangciLint { args } => golangci_cmd::run(&args, cli.verbose)?,
 
+        Commands::Gofmt { args } => gofmt_cmd::run(gofmt_cmd::FmtTool::Gofmt, &args, cli.verbose)?,
+
+        Commands::Goimports { args } => {
+            gofmt_cmd::run(gofmt_cmd::FmtTool::Goimports, &args, cli.verbose)?
+        }
+
+        Commands::Goreleaser { args } => goreleaser_cmd::run(&args, cli.verbose)?,
+
+        Commands::Gotestsum { args } => gotestsum_cmd::run(&args, cli.verbose)?,
+
+        Commands::Govulncheck { args } => govulncheck_cmd::run(&args, cli.verbose)?,
+
+        Commands::Staticcheck { args } => staticcheck_cmd::run(&args, cli.verbose)?,
+
         Commands::Gradlew { args } => gradlew_cmd::run(&args, cli.verbose)?,
 
         Commands::Mvn { args } => mvn_cmd::run(&args, cli.verbose)?,
@@ -3324,6 +3389,12 @@ fn is_operational_command(cmd: &Commands) -> bool {
             | Commands::Sbt { .. }
             | Commands::Buf { .. }
             | Commands::GolangciLint { .. }
+            | Commands::Gofmt { .. }
+            | Commands::Goimports { .. }
+            | Commands::Goreleaser { .. }
+            | Commands::Gotestsum { .. }
+            | Commands::Govulncheck { .. }
+            | Commands::Staticcheck { .. }
             | Commands::Gt { .. }
             | Commands::Bun { .. }
             | Commands::Bunx { .. }
@@ -3866,6 +3937,12 @@ mod tests {
             "gt",
             "buf",
             "golangci-lint",
+            "gofmt",
+            "goimports",
+            "goreleaser",
+            "gotestsum",
+            "govulncheck",
+            "staticcheck",
             "gradlew",
             "mvn",
             "mvnd",

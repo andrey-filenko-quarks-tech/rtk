@@ -205,6 +205,27 @@ fn cleanup_jsonfile(path: &Path, created_by_rtk: bool, verbose: u8) {
     }
 }
 
+type FileStamp = (SystemTime, u64);
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
+/// The events this run wrote. A file unchanged since `before` holds an earlier run's events
+/// (gotestsum exited before writing), so it is not read. rtk's own file is removed here, in the
+/// filter: a relayed SIGTERM ends rtk before any cleanup after the runner returns.
+fn take_events(path: &Path, created_by_rtk: bool, before: Option<FileStamp>) -> Option<String> {
+    if before.is_some() && file_stamp(path) == before {
+        return None;
+    }
+    let events = std::fs::read_to_string(path).ok()?;
+    if created_by_rtk {
+        let _ = std::fs::remove_file(path);
+    }
+    Some(events)
+}
+
 /// The `go test` view of a gotestsum events file; `None` when it holds no test events.
 fn render_events(events: &str) -> Option<String> {
     let has_events = events.lines().any(|l| {
@@ -243,13 +264,13 @@ pub(crate) fn run_with(bin: ToolBin, args: &[String], verbose: u8) -> Result<i32
     if verbose > 0 {
         eprintln!("Running: {tool_name} {}", full_args.join(" "));
     }
+    let before = file_stamp(&path);
     let read_path = path.clone();
     let result = runner::run_filtered(
         cmd,
         &tool_name,
         &args.join(" "),
-        move |output| match std::fs::read_to_string(&read_path)
-            .ok()
+        move |output| match take_events(&read_path, created_by_rtk, before)
             .as_deref()
             .and_then(render_events)
         {
@@ -263,8 +284,10 @@ pub(crate) fn run_with(bin: ToolBin, args: &[String], verbose: u8) -> Result<i32
         },
         runner::RunOptions::with_tee(TOOL),
     );
-    // Before propagating the result, so a failed spawn leaves no temp file behind.
-    cleanup_jsonfile(&path, created_by_rtk, verbose);
+    // A failed spawn never reaches the filter; remove a file it might have left.
+    if path.exists() {
+        cleanup_jsonfile(&path, created_by_rtk, verbose);
+    }
     result
 }
 
@@ -388,6 +411,31 @@ mod tests {
         assert!(!ours.exists());
         assert!(theirs.exists());
         std::fs::remove_file(&theirs).expect("remove");
+    }
+
+    #[test]
+    fn rtk_events_are_read_and_removed_at_once() {
+        // Removed inside the filter: a relayed SIGTERM kills rtk before any later cleanup.
+        let path = temp_jsonfile();
+        std::fs::write(&path, "events").expect("write");
+        assert_eq!(take_events(&path, true, None).as_deref(), Some("events"));
+        assert!(!path.exists());
+        assert_eq!(take_events(&path, true, None), None);
+    }
+
+    #[test]
+    fn a_users_jsonfile_the_run_did_not_rewrite_is_not_read() {
+        let path = temp_jsonfile();
+        std::fs::write(&path, "old run").expect("write");
+        let before = file_stamp(&path);
+        assert_eq!(take_events(&path, false, before), None);
+        std::fs::write(&path, "this run, longer").expect("write");
+        assert_eq!(
+            take_events(&path, false, before).as_deref(),
+            Some("this run, longer")
+        );
+        assert!(path.exists(), "a user's file is never removed");
+        std::fs::remove_file(&path).expect("remove");
     }
 
     #[test]

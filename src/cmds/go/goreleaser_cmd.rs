@@ -129,6 +129,8 @@ fn field<'a>(text: &'a str, key: &str) -> Option<&'a str> {
 fn parse(output: &str) -> Log {
     let mut log = Log::default();
     let plain = strip_ansi(output);
+    // goreleaser prints a multi-line field (a compiler error) as indented lines under its `⨯`.
+    let mut in_error = false;
     for line in plain.lines() {
         let trimmed = line.trim_start();
         let top_level = line.len() - trimmed.len() <= 2;
@@ -137,8 +139,13 @@ fn parse(output: &str) -> Log {
         } else if let Some(t) = trimmed.strip_prefix("⨯ ") {
             (true, t)
         } else {
+            if in_error && !trimmed.trim_end().is_empty() {
+                log.errors.push(format!("  {}", trimmed.trim_end()));
+            }
             continue;
         };
+        in_error = failed_bullet;
+        let trimmed = trimmed.trim_end();
         // goreleaser aligns `key=value` fields after the message with a run of spaces.
         let message = text.split("  ").next().unwrap_or(text).trim();
         if text.contains("level=warn") || message.starts_with("DEPRECATED") {
@@ -377,6 +384,21 @@ mod tests {
         );
         // The snapshot's informational `error=` on a `•` line is not an error.
         assert!(!joined(FAIL).contains("ignoring errors"));
+    }
+
+    #[test]
+    fn multi_line_error_fields_are_kept() {
+        let input =
+            include_str!("../../../tests/fixtures/go_goreleaser_build_compile_fail_raw.txt");
+        assert_eq!(
+            joined(input),
+            "goreleaser: build failed after 0s in \"building binaries\"\n\
+             \x20 ⨯ build failed after 0s\n\
+             \x20   error=\n\
+             \x20   │ build failed: exit status 1: # example.com/rel\n\
+             \x20   │ ./main.go:3:15: undefined: undefinedFoo\n\
+             \x20   target=darwin_arm64_v8.0"
+        );
     }
 
     #[test]

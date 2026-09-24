@@ -82,11 +82,26 @@ pub fn run(args: &[String], verbose: u8) -> Result<i32> {
             go_mod_cmd::run_go_passthrough("list", &args, verbose)
         }
         invocation => {
-            let requires = go_mod_cmd::resolve_go_mod(chdir, modfile)
-                .as_deref()
-                .and_then(go_mod_cmd::read_requires);
+            let requires = requires_for(&invocation, go_mod_cmd::in_workspace(chdir), || {
+                go_mod_cmd::resolve_go_mod(chdir, modfile)
+                    .as_deref()
+                    .and_then(go_mod_cmd::read_requires)
+            });
             run_filtered_list(&args, invocation, requires, verbose)
         }
+    }
+}
+
+/// The go.mod requirements a view needs: none for package lists, and none in a workspace,
+/// where the nearest go.mod covers only one of several main modules.
+fn requires_for(
+    invocation: &ListInvocation,
+    workspace: bool,
+    load: impl FnOnce() -> Option<Vec<Require>>,
+) -> Option<Vec<Require>> {
+    match invocation {
+        ListInvocation::ModulesAll | ListInvocation::ModulesUpdates if !workspace => load(),
+        _ => None,
     }
 }
 
@@ -244,6 +259,8 @@ fn filter_modules_updates(stdout: &str, requires: Option<&[Require]>) -> String 
     });
     let mut updates = 0;
     let mut direct_updates = 0;
+    // Indirect modules flagged only by a marker: not listed, but never silently dropped.
+    let mut hidden_flagged = 0;
     let mut rows: Vec<String> = Vec::new();
     for line in &modules {
         let words: Vec<&str> = line.split_whitespace().collect();
@@ -265,6 +282,7 @@ fn filter_modules_updates(stdout: &str, requires: Option<&[Require]>) -> String 
         updates += usize::from(newer.is_some());
         direct_updates += usize::from(newer.is_some() && listed);
         if !listed {
+            hidden_flagged += usize::from(newer.is_none());
             continue;
         }
         let mut row = match newer {
@@ -277,13 +295,13 @@ fn filter_modules_updates(stdout: &str, requires: Option<&[Require]>) -> String 
         }
         rows.push(row);
     }
-    if updates == 0 && rows.is_empty() {
+    if updates == 0 && rows.is_empty() && hidden_flagged == 0 {
         return format!(
             "go list -m -u all: all {} modules up to date",
             modules.len()
         );
     }
-    let split = if direct.is_some() {
+    let mut split = if direct.is_some() {
         format!(
             " ({direct_updates} direct, {} indirect)",
             updates - direct_updates
@@ -291,6 +309,11 @@ fn filter_modules_updates(stdout: &str, requires: Option<&[Require]>) -> String 
     } else {
         String::new()
     };
+    if hidden_flagged > 0 {
+        split.push_str(&format!(
+            ", {hidden_flagged} indirect retracted or deprecated"
+        ));
+    }
     let mut out = vec![format!(
         "go list -m -u all: {updates} of {} modules have updates{split}",
         modules.len()
@@ -384,7 +407,31 @@ mod tests {
     }
 
     #[test]
-    fn modules_updates_lists_only_updatable_modules_direct_first() {
+    fn workspace_updates_ignore_the_nearest_go_mod() {
+        // In a go.work, the nearest go.mod belongs to one module: its direct set would mislabel
+        // the other modules' direct requirements as indirect.
+        let never = || -> Option<Vec<Require>> { panic!("go.mod must not be read") };
+        assert!(requires_for(&ListInvocation::ModulesUpdates, true, never).is_none());
+        assert!(requires_for(&ListInvocation::Packages, false, never).is_none());
+        let one = || Some(vec![req("a.io/x", false)]);
+        assert_eq!(
+            requires_for(&ListInvocation::ModulesUpdates, false, one).map(|r| r.len()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn indirect_retracted_modules_are_counted_not_hidden() {
+        let raw = "example.com/m\na.io/x v1.0.0\nb.io/y v1.0.0 (retracted)\n";
+        let requires = [req("a.io/x", false)];
+        assert_eq!(
+            filter_modules_updates(raw, Some(&requires[..])),
+            "go list -m -u all: 0 of 2 modules have updates (0 direct, 0 indirect), 1 indirect retracted or deprecated"
+        );
+    }
+
+    #[test]
+    fn modules_updates_lists_direct_updates_and_counts_the_rest() {
         let raw = "\
 example.com/m
 a.io/x v1.0.0
@@ -397,7 +444,7 @@ d.io/w v1.0.0 (deprecated)
         assert_eq!(
             filter_modules_updates(raw, Some(&requires[..])),
             "\
-go list -m -u all: 2 of 4 modules have updates (1 direct, 1 indirect)
+go list -m -u all: 2 of 4 modules have updates (1 direct, 1 indirect), 1 indirect retracted or deprecated
   c.io/z v0.1.0 → v0.2.0 (retracted)"
         );
         // Without go.mod nothing is known to be direct, so every flagged module is listed.

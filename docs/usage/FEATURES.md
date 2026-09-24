@@ -832,6 +832,20 @@ Diagnostics JSON regroupes par regle (erreurs de compilation en cascade fusionne
 
 ---
 
+### `rtk go mod` / `rtk go list` / `rtk go generate` -- Sous-commandes Go
+
+```bash
+rtk go mod graph               # Resume : dependances directes, conflits de versions
+rtk go mod tidy                # Changements de go.mod (+/-/~), sans le bruit de telechargement
+rtk go list ./...              # Chemin du module affiche une seule fois
+rtk go list -m -u all          # Seulement les modules directs avec mise a jour
+rtk go generate ./...          # "ok" en cas de succes, fin de sortie en cas d'echec
+```
+
+`go list` et `go mod graph` ne sont jamais reecrits en tete de pipe.
+
+---
+
 ## Commandes Formatage
 
 ### `rtk prettier` -- Prettier
@@ -1326,7 +1340,7 @@ rtk verify
 | `pytest` | `rtk pytest` |
 | `mypy` | `rtk mypy` |
 | `pip list/install` | `rtk pip ...` |
-| `go test/build/vet` | `rtk go ...` |
+| `go test/build/vet/list/mod tidy/mod graph/generate` | `rtk go ...` |
 | `golangci-lint` | `rtk golangci-lint` |
 | `buf lint/build/breaking/format/generate` | `rtk buf ...` |
 | `docker ps/images/logs` | `rtk docker ...` |

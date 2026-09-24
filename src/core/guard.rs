@@ -1,6 +1,6 @@
 //! Never-worse output guard: RTK never emits more tokens than the raw command.
 //!
-//! One caller is allowed past it. `rtk diff` prints a one-line message for a
+//! Two callers are allowed past it. `rtk diff` prints a one-line message for a
 //! difference `str::lines()` cannot render — CRLF against LF, or a missing
 //! final newline — where the raw fallback is two blobs that look identical and
 //! answer the question worse at any size. The exception is bounded by the case
@@ -10,6 +10,12 @@
 //! the shortest form of the message is ~20 tokens and a one-line pair is ~2, so
 //! the ceiling sat under the message's own floor and dropped it on 90% of
 //! one-line pairs.
+//!
+//! The second is a report of what a command changed on disk when the command
+//! prints nothing about it, so the guard's premise — the raw output holds the
+//! information — does not apply. It is bounded to a capped change list; every
+//! other part of that output stays guarded. Its one caller, `rtk go mod tidy`,
+//! documents the case in `src/cmds/go/README.md`.
 
 use crate::core::tracking::estimate_tokens;
 

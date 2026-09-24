@@ -1,0 +1,8 @@
+24 Sep 26 17:13 EEST INF couldn't read any config file version=v2.53.3
+24 Sep 26 17:13 EEST INF Starting mockery dry-run=false version=v2.53.3
+24 Sep 26 17:13 EEST INF Using config:  dry-run=false version=v2.53.3
+24 Sep 26 17:13 EEST INF Walking dry-run=false version=v2.53.3
+24 Sep 26 17:13 EEST ERR Unable to find 'Missing' in any go files under this path dry-run=false version=v2.53.3
+24 Sep 26 17:13 EEST WRN DEPRECATION: use of the packages config will be the only way to generate mocks in v3. Please migrate your config to use the packages feature. deprecation-name=packages migration=https://vektra.github.io/mockery/v2.53/migrating_to_packages/ url=https://vektra.github.io/mockery/v2.53/features/#packages-configuration version=v2.53.3
+unable to find interface
+store/store.go:3: running "mockery": exit status 1

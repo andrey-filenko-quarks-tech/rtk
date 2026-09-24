@@ -48,7 +48,7 @@ The LLM doesn't know RTK is involved for which commands, hooks rewrite commands 
 
 Don't invent new output formats. Don't add RTK-specific headers or markers in the default output. The filtered output should be indistinguishable from "a shorter version of the real command."
 
-Enforce it with `guard::never_worse(raw, filtered)` — print and track the value it returns (use `runner::emit_guarded(filtered, hint, raw)` when appending a tee hint). It guarantees RTK never emits more tokens than the raw command, down to emitting nothing when the command produced nothing.
+Enforce it with `guard::never_worse(raw, filtered)` — print and track the value it returns (use `runner::emit_guarded(filtered, hint, raw)` when appending a tee hint). It guarantees RTK never emits more tokens than the raw command, down to emitting nothing when the command produced nothing. The few exceptions are listed, with their bounds, in [`src/core/guard.rs`](src/core/guard.rs); a new one needs maintainer sign-off.
 
 ### Never Block
 

@@ -552,13 +552,24 @@ pub const RULES: &[RtkRule] = &[
         ..RtkRule::DEFAULT
     },
     RtkRule {
-        pattern: r"^go\s+(test|build|vet)",
+        pattern: r"^go\s+(test|build|vet|list|mod\s+(?:tidy|graph)|generate)(?:\s|$)",
         rtk_cmd: "rtk go",
         pipeline_safety: PipelineSafety::ProducerOnly,
         rewrite_prefixes: &["go"],
         category: "Go",
         savings_pct: 85.0,
-        subcmd_savings: &[("test", 90.0), ("build", 80.0), ("vet", 75.0)],
+        subcmd_savings: &[
+            ("test", 90.0),
+            ("build", 80.0),
+            ("vet", 75.0),
+            ("list", 65.0),
+            // Cold-cache download chatter; a warm run that changed go.mod emits more than
+            // tidy's empty output (the guard-exempt change list), so its own figure is negative.
+            ("mod tidy", 95.0),
+            ("mod graph", 80.0),
+            // Successful generator logs; a short failure is shown whole.
+            ("generate", 65.0),
+        ],
         ..RtkRule::DEFAULT
     },
     RtkRule {

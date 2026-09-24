@@ -84,6 +84,10 @@ Every percentage below measures **bash output bytes removed** — the only thing
 | `buf format -d` | 90% | One line per file with +/- counts |
 | `buf generate` (failure) | 75% | Plugin panic cut after its first frame, `Failure:` line kept |
 | `go build` | 75% | Errors only |
+| `go mod graph` | 80% | Counts, direct requirements, version conflicts |
+| `go mod tidy` | 95% | Download chatter dropped; go.mod changes listed |
+| `go list` | 65-77% | Shared module path once; `-m -u all` direct updates only |
+| `go generate` | 65-99% | Success collapses to ok; failures keep the tail |
 
 ## Ruby
 

@@ -168,7 +168,7 @@ Savings by ecosystem:
   GIT (cmds/git/)          85-99%    status, diff, log, gh, gt
   JS/TS (cmds/js/)         70-99%    lint, tsc, next, prettier, playwright, prisma, vitest, pnpm
   PYTHON (cmds/python/)    70-90%    ruff, pytest, mypy, pip
-  GO (cmds/go/)            75-90%    go test/build/vet, golangci-lint, buf
+  GO (cmds/go/)            65-95%    go test/build/vet/mod/list/generate, golangci-lint, buf
   RUBY (cmds/ruby/)        60-90%    rake, rspec, rubocop
   DOTNET (cmds/dotnet/)    70-85%    dotnet build/test, binlog
   CLOUD (cmds/cloud/)      60-80%    aws, docker/kubectl, curl, wget, psql
@@ -192,7 +192,7 @@ Savings by ecosystem:
 - **Git Commands**: 7 operations (status, diff, log, add, commit, push, branch/checkout)
 - **JS/TS Tooling**: 8 modules (modern frontend/fullstack development)
 - **Python Tooling**: 3 modules (ruff, pytest, pip)
-- **Go Tooling**: 3 modules (go test/build/vet, golangci-lint, buf)
+- **Go Tooling**: 6 modules (go test/build/vet, go mod, go list, go generate, golangci-lint, buf)
 
 ---
 
@@ -351,12 +351,18 @@ PYTHON (Standalone Commands)         GO (Sub-Enum Pattern)
 Commands::Ruff { args }       ──────  Commands::Go {
 Commands::Pytest { args }              Test { args },
 Commands::Pip { args }                 Build { args },
-                                       Vet { args }
+                                       Vet { args },
+                                       Mod { args },
+                                       List { args },
+                                       Generate { args }
                                      }
 ├─ ruff_cmd.rs                       Commands::GolangciLint { args }
 ├─ pytest_cmd.rs                     Commands::Buf { args }
                                      │
 └─ pip_cmd.rs                        ├─ go_cmd.rs (sub-enum router)
+                                     ├─ go_mod_cmd.rs
+                                     ├─ go_list_cmd.rs
+                                     ├─ go_generate_cmd.rs
                                      ├─ golangci_cmd.rs
                                      └─ buf_cmd.rs
 
@@ -470,11 +476,31 @@ buf_cmd.rs        JSON PARSING          NDJSON            75-90%
 
   buf format -d:   unified diff → "path (+a -r)" per file, full diff in recall
   buf generate:    failure only → plugin panic cut after its first frame, Failure: line kept
+
+go_mod_cmd.rs     TEXT PARSING          Edge list / diff   80-95%
+
+  go mod graph: "from to@version" edges
+    → Counts, direct requirements with transitive fan-out, multi-version modules
+  go mod tidy:  go.mod read before and after the run
+    → "+/-/~" change list (the capped, guard-exempt report); download chatter counted
+
+go_list_cmd.rs    TEXT PARSING          Package / module   65-77%
+
+  go list ./...:        shared module path printed once, relative paths
+  go list -m (-u) all:  direct requirements from go.mod; indirect counted
+  -f / -json / -e:      passthrough (machine-shaped output)
+
+go_generate_cmd.rs TEXT FILTERING       Combined stream    65-99%
+
+  success → "go generate: ok"; failure → tail with Go's `running "…"` verdict
+
+Helpers (no command of their own): go_args.rs (Go flag rules), go_modfile.rs (go.mod,
+-C/-modfile/GOFLAGS, workspaces), go_run.rs (passthrough, recall hint).
 ```
 
 #### Sub-Enum Pattern (go_cmd.rs)
 
-Uses `Commands::Go { #[command(subcommand)] command: GoCommand }` in main.rs, with `GoCommand` enum routing to `run_test/run_build/run_vet`. Mirrors git/cargo patterns.
+Uses `Commands::Go { #[command(subcommand)] command: GoCommands }` in main.rs, with `GoCommands` enum routing to `run_test/run_build/run_vet` in go_cmd.rs and to go_mod_cmd / go_list_cmd / go_generate_cmd. Mirrors git/cargo patterns.
 
 **Why Sub-Enum?**
 - `go test/build/vet` are semantically related (core Go toolchain)

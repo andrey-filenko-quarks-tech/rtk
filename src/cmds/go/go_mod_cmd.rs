@@ -1,0 +1,866 @@
+//! Filters `go mod` output: `graph` summarised to direct requirements and version
+//! conflicts, `tidy` reported as a `go.mod` diff.
+
+use crate::cmds::go::go_args::{GoFlags, bool_flag, flag_value, go_flags, wants_help};
+use crate::cmds::go::go_modfile::{Require, parse_requires, resolve_go_mod};
+use crate::cmds::go::go_run::{append_hint, run_go_passthrough};
+use crate::core::arg_tokenizer::{TokenKind, ValueSpec};
+use crate::core::guard::never_worse;
+use crate::core::runner;
+use crate::core::stream::{self, FilterMode, StdinMode};
+use crate::core::tee;
+use crate::core::tracking;
+use crate::core::truncate::CAP_LIST;
+use crate::core::utils::resolved_command;
+use anyhow::{Context, Result};
+use std::collections::{HashMap, HashSet, VecDeque};
+
+const MAX_GRAPH_ITEMS: usize = CAP_LIST;
+const GRAPH_TEE_LABEL: &str = "go-mod-graph";
+const MAX_TIDY_CHANGES: usize = CAP_LIST;
+const TIDY_TEE_LABEL: &str = "go-mod-tidy";
+
+fn graph_takes_value(kind: TokenKind, name: &str) -> Option<ValueSpec> {
+    (kind == TokenKind::Long && matches!(name, "C" | "modfile" | "go" | "overlay"))
+        .then(ValueSpec::value)
+}
+
+fn tidy_takes_value(kind: TokenKind, name: &str) -> Option<ValueSpec> {
+    (kind == TokenKind::Long && matches!(name, "C" | "modfile" | "go" | "compat" | "overlay"))
+        .then(ValueSpec::value)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ModInvocation {
+    Tidy {
+        chdir: Option<String>,
+        modfile: Option<String>,
+    },
+    Graph,
+    Passthrough,
+}
+
+/// Flags only, no stray positional (the subcommands filtered here take none: a stray one is
+/// Go's usage error to print), and no help request.
+fn filterable(flags: &GoFlags<'_>, args: &[String]) -> bool {
+    flags.rest == args.len() && !wants_help(&flags.tokens)
+}
+
+// `go mod` takes no flags before its subcommand, so the first argument is the subcommand.
+fn classify(args: &[String]) -> ModInvocation {
+    let Some((sub, rest)) = args.split_first() else {
+        return ModInvocation::Passthrough;
+    };
+    match sub.as_str() {
+        "graph" if filterable(&go_flags(rest, &graph_takes_value), rest) => ModInvocation::Graph,
+        "tidy" => {
+            let flags = go_flags(rest, &tidy_takes_value);
+            // `-diff` prints what tidy would change and changes nothing: the user's own view.
+            if !filterable(&flags, rest) || bool_flag(&flags.tokens, "diff") {
+                ModInvocation::Passthrough
+            } else {
+                ModInvocation::Tidy {
+                    chdir: flag_value(&flags.tokens, "C").map(String::from),
+                    modfile: flag_value(&flags.tokens, "modfile").map(String::from),
+                }
+            }
+        }
+        _ => ModInvocation::Passthrough,
+    }
+}
+
+pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+    let args = crate::core::args_utils::restore_double_dash(args);
+    match classify(&args) {
+        ModInvocation::Tidy { chdir, modfile } => {
+            run_tidy(&args, chdir.as_deref(), modfile.as_deref(), verbose)
+        }
+        ModInvocation::Graph => run_graph(&args, verbose),
+        ModInvocation::Passthrough => run_go_passthrough("mod", &args, verbose),
+    }
+}
+
+fn run_graph(args: &[String], verbose: u8) -> Result<i32> {
+    let mut cmd = resolved_command("go");
+    cmd.arg("mod").args(args);
+    if verbose > 0 {
+        eprintln!("Running: go mod {}", args.join(" "));
+    }
+    runner::run_filtered_with_exit(
+        cmd,
+        "go mod",
+        &args.join(" "),
+        move |stdout, exit_code| {
+            if verbose > 1 {
+                eprintln!("{stdout}");
+            }
+            let filtered = filter_go_mod_graph(stdout);
+            if verbose > 0 && filtered == stdout && !stdout.trim().is_empty() {
+                eprintln!("rtk: filter warning: go mod graph output not recognised, shown as is");
+            }
+            // Recall stores the raw graph, not the capped rows: the summary drops every edge,
+            // and those are what a reader recovers the output for.
+            append_hint(stdout, filtered, exit_code, || {
+                tee::force_tee_hint(stdout, GRAPH_TEE_LABEL)
+            })
+        },
+        runner::RunOptions::stdout_only().tee(GRAPH_TEE_LABEL),
+    )
+}
+
+/// Modules reachable from `start`, excluding `start` itself.
+fn transitive_count(adjacency: &HashMap<&str, Vec<&str>>, start: &str) -> usize {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut queue: VecDeque<&str> = adjacency
+        .get(start)
+        .into_iter()
+        .flatten()
+        .copied()
+        .collect();
+    while let Some(node) = queue.pop_front() {
+        if node != start && seen.insert(node) {
+            queue.extend(adjacency.get(node).into_iter().flatten().copied());
+        }
+    }
+    seen.len()
+}
+
+/// Module paths seen at more than one version, versions in order of first appearance (string
+/// order would put `v0.10` before `v0.9`).
+fn version_conflicts<'a>(edges: &[(&'a str, &'a str)]) -> Vec<(&'a str, Vec<&'a str>)> {
+    let mut order: Vec<(&str, Vec<&str>)> = Vec::new();
+    let mut index: HashMap<&str, usize> = HashMap::new();
+    for node in edges.iter().flat_map(|(from, to)| [*from, *to]) {
+        let Some((path, version)) = node.split_once('@') else {
+            continue;
+        };
+        let slot = *index.entry(path).or_insert_with(|| {
+            order.push((path, Vec::new()));
+            order.len() - 1
+        });
+        if !order[slot].1.contains(&version) {
+            order[slot].1.push(version);
+        }
+    }
+    order
+        .into_iter()
+        .filter(|(_, versions)| versions.len() > 1)
+        .collect()
+}
+
+fn push_capped(out: &mut String, lines: &[String]) {
+    for line in lines.iter().take(MAX_GRAPH_ITEMS) {
+        out.push_str("  ");
+        out.push_str(line);
+        out.push('\n');
+    }
+    if lines.len() > MAX_GRAPH_ITEMS {
+        out.push_str(&format!("  … +{} more\n", lines.len() - MAX_GRAPH_ITEMS));
+    }
+}
+
+/// Edges of `go mod graph`, `None` when a line is not `from to@version` (output this filter does
+/// not understand). `go@…` / `toolchain@…` targets record Go version requirements, not modules.
+fn parse_graph_edges(stdout: &str) -> Option<Vec<(&str, &str)>> {
+    let edges = stdout
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            l.split_once(' ')
+                .filter(|(_, to)| to.contains('@') && !to.contains(' '))
+        })
+        .collect::<Option<Vec<(&str, &str)>>>()?;
+    Some(
+        edges
+            .into_iter()
+            .filter(|(_, to)| !to.starts_with("go@") && !to.starts_with("toolchain@"))
+            .collect(),
+    )
+}
+
+/// The main modules' direct requirements with their transitive fan-out, most fan-out first.
+fn direct_requirements<'a>(
+    mains: &[&'a str],
+    adjacency: &HashMap<&'a str, Vec<&'a str>>,
+) -> Vec<(&'a str, usize)> {
+    let mut direct: Vec<(&str, usize)> = mains
+        .iter()
+        .filter_map(|m| adjacency.get(m))
+        .flatten()
+        .map(|d| (*d, transitive_count(adjacency, d)))
+        .collect();
+    direct.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    direct.dedup_by(|a, b| a.0 == b.0);
+    direct
+}
+
+/// Summarise `go mod graph`: module and edge counts, the main module's direct requirements with
+/// their transitive fan-out, and modules required at more than one version.
+fn filter_go_mod_graph(stdout: &str) -> String {
+    let Some(edges) = parse_graph_edges(stdout) else {
+        return stdout.to_string();
+    };
+    // Main modules are the unversioned sources: one normally, several in a workspace.
+    let mut mains: Vec<&str> = Vec::new();
+    for (from, _) in &edges {
+        if !from.contains('@') && !mains.contains(from) {
+            mains.push(from);
+        }
+    }
+    let Some(main) = mains.first() else {
+        return stdout.to_string();
+    };
+    let mut adjacency: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut nodes: HashSet<&str> = HashSet::new();
+    for (from, to) in &edges {
+        adjacency.entry(from).or_default().push(to);
+        nodes.insert(from);
+        nodes.insert(to);
+    }
+    let direct = direct_requirements(&mains, &adjacency);
+    let conflicts = version_conflicts(&edges);
+
+    let others = match mains.len() - 1 {
+        0 => String::new(),
+        1 => " +1 workspace module".to_string(),
+        n => format!(" +{n} workspace modules"),
+    };
+    let mut out = format!(
+        "go mod graph: {} modules, {} edges (main {main}{others})\ndirect ({}):\n",
+        nodes.len(),
+        edges.len(),
+        direct.len()
+    );
+    let direct_lines: Vec<String> = direct
+        .iter()
+        .map(|(d, n)| format!("{d} (+{n} transitive)"))
+        .collect();
+    push_capped(&mut out, &direct_lines);
+    if !conflicts.is_empty() {
+        out.push_str(&format!("multiple versions ({}):\n", conflicts.len()));
+        let conflict_lines: Vec<String> = conflicts
+            .iter()
+            .map(|(p, v)| format!("{p}: {}", v.join(", ")))
+            .collect();
+        push_capped(&mut out, &conflict_lines);
+    }
+    out.trim_end().to_string()
+}
+
+/// A single-line directive's value (`go 1.22`, `toolchain go1.23.1`).
+fn directive(go_mod: &str, name: &str) -> Option<String> {
+    go_mod.lines().map(str::trim).find_map(|line| {
+        line.strip_prefix(name)
+            .filter(|rest| rest.starts_with([' ', '\t']))
+            .map(|rest| rest.trim().to_string())
+    })
+}
+
+/// Changes to the `go` and `toolchain` directives, which `tidy -go=…` rewrites and tidy never
+/// reports either.
+fn directive_changes(before: &str, after: &str) -> Vec<String> {
+    ["go", "toolchain"]
+        .iter()
+        .filter_map(
+            |name| match (directive(before, name), directive(after, name)) {
+                (Some(old), Some(new)) if old != new => Some(format!("~ {name} {old} → {new}")),
+                (None, Some(new)) => Some(format!("+ {name} {new}")),
+                (Some(old), None) => Some(format!("- {name} {old}")),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
+struct TidyReport {
+    changes: Vec<String>,
+    added: usize,
+    removed: usize,
+    changed: usize,
+    downloads: usize,
+    kept: Vec<String>,
+    /// go.mod could not be read before or after the run, so the diff is unknown.
+    unknown: bool,
+}
+
+impl TidyReport {
+    /// Directive changes count as `changed`: they are settings, not dependencies.
+    fn add_directive_changes(&mut self, lines: Vec<String>) {
+        self.changed += lines.len();
+        self.changes.extend(lines);
+    }
+}
+
+fn is_tidy_chatter(line: &str) -> bool {
+    line.starts_with("go: downloading ")
+        || (line.starts_with("go: finding ") && !line.starts_with("go: finding module for package"))
+}
+
+fn tidy_report(before: Option<&[Require]>, after: Option<&[Require]>, output: &str) -> TidyReport {
+    let mut report = TidyReport {
+        changes: Vec::new(),
+        added: 0,
+        removed: 0,
+        changed: 0,
+        downloads: 0,
+        kept: Vec::new(),
+        unknown: before.is_none() || after.is_none(),
+    };
+    for line in output.lines().filter(|l| !l.trim().is_empty()) {
+        if is_tidy_chatter(line) {
+            report.downloads += usize::from(line.starts_with("go: downloading "));
+        } else {
+            report.kept.push(line.to_string());
+        }
+    }
+    let (Some(before), Some(after)) = (before, after) else {
+        return report;
+    };
+    let old: HashMap<&str, &Require> = before.iter().map(|r| (r.path.as_str(), r)).collect();
+    let new: HashMap<&str, &Require> = after.iter().map(|r| (r.path.as_str(), r)).collect();
+    for r in after.iter().filter(|r| !old.contains_key(r.path.as_str())) {
+        report.changes.push(format!("+ {} {}", r.path, r.version));
+        report.added += 1;
+    }
+    for r in before.iter().filter(|r| !new.contains_key(r.path.as_str())) {
+        report.changes.push(format!("- {} {}", r.path, r.version));
+        report.removed += 1;
+    }
+    for r in after {
+        let Some(prev) = old.get(r.path.as_str()) else {
+            continue;
+        };
+        let flip = match (prev.indirect, r.indirect) {
+            (false, true) => " (now indirect)",
+            (true, false) => " (now direct)",
+            _ => "",
+        };
+        if prev.version != r.version {
+            report.changes.push(format!(
+                "~ {} {} → {}{flip}",
+                r.path, prev.version, r.version
+            ));
+        } else if !flip.is_empty() {
+            report
+                .changes
+                .push(format!("~ {} {}{flip}", r.path, r.version));
+        } else {
+            continue;
+        }
+        report.changed += 1;
+    }
+    report
+}
+
+fn tidy_header(report: &TidyReport) -> Option<String> {
+    let downloads = if report.downloads > 0 {
+        format!(" ({} modules downloaded)", report.downloads)
+    } else {
+        String::new()
+    };
+    if !report.changes.is_empty() {
+        Some(format!(
+            "go mod tidy: +{} added, -{} removed, ~{} changed{downloads}",
+            report.added, report.removed, report.changed
+        ))
+    } else if report.downloads == 0 {
+        None
+    } else if report.unknown {
+        // Never "no changes" when rtk could not see go.mod: that would state what it does not know.
+        Some(format!(
+            "go mod tidy: changes unknown, go.mod not readable{downloads}"
+        ))
+    } else {
+        Some(format!("go mod tidy: no changes{downloads}"))
+    }
+}
+
+fn render_tidy(report: &TidyReport, max: usize) -> String {
+    let mut lines: Vec<String> = tidy_header(report).into_iter().collect();
+    lines.extend(report.changes.iter().take(max).map(|c| format!("  {c}")));
+    if report.changes.len() > max {
+        lines.push(format!("  … +{} more", report.changes.len() - max));
+    }
+    lines.join("\n")
+}
+
+/// The stdout summary. The diff is information the raw output never contains (tidy prints
+/// nothing about what it changed), so it is exempt from `never_worse` — see `core/guard.rs`;
+/// a summary without changes is guarded. Go's own kept lines go to stderr, where Go wrote them.
+fn emit_tidy(report: &TidyReport, raw: &str) -> String {
+    let rendered = render_tidy(report, MAX_TIDY_CHANGES);
+    if report.changes.is_empty() {
+        never_worse(raw, &rendered).to_string()
+    } else {
+        rendered
+    }
+}
+
+/// On exit 0 with more changes than shown, the full formatted list is stored so recall returns
+/// exactly the hidden tail (header line + shown lines, then the first hidden one).
+fn tidy_tail_hint(
+    report: &TidyReport,
+    store: impl FnOnce(&str, usize) -> Option<String>,
+) -> Option<String> {
+    if report.changes.len() <= MAX_TIDY_CHANGES {
+        return None;
+    }
+    let mut content: Vec<String> = tidy_header(report).into_iter().collect();
+    content.extend(report.changes.iter().map(|c| format!("  {c}")));
+    store(&content.join("\n"), 1 + MAX_TIDY_CHANGES + 1)
+}
+
+/// A failure's recall hint is appended only while it keeps the output within the raw size —
+/// the guard `runner::emit_guarded` applies to body and hint together.
+fn with_failure_hint(body: String, hint: Option<String>, raw: &str) -> String {
+    let Some(hint) = hint else {
+        return body;
+    };
+    let combined = if body.is_empty() {
+        hint
+    } else {
+        format!("{body}\n{hint}")
+    };
+    if never_worse(raw, &combined) == combined {
+        combined
+    } else {
+        body
+    }
+}
+
+/// Tidy runs outside the runner helpers because its diff is exempt from `never_worse`. Like
+/// `runner::run`, it re-raises a relayed signal on every path, error included.
+fn run_tidy(
+    args: &[String],
+    chdir: Option<&str>,
+    modfile: Option<&str>,
+    verbose: u8,
+) -> Result<i32> {
+    let result = run_tidy_inner(args, chdir, modfile, verbose);
+    stream::die_by_relayed_signal();
+    result
+}
+
+/// The stdout summary plus its recovery hint: the raw output's tee on failure (kept only while
+/// it fits), or the full change list when the shown one was capped.
+fn tidy_stdout(report: &TidyReport, raw: &str, exit_code: i32) -> String {
+    let body = emit_tidy(report, raw);
+    if exit_code != 0 {
+        return with_failure_hint(body, tee::tee_and_hint(raw, TIDY_TEE_LABEL, exit_code), raw);
+    }
+    match tidy_tail_hint(report, |content, offset| {
+        tee::force_tee_tail_hint(content, TIDY_TEE_LABEL, offset)
+    }) {
+        Some(hint) => format!("{body}\n{hint}"),
+        None => body,
+    }
+}
+
+fn run_tidy_inner(
+    args: &[String],
+    chdir: Option<&str>,
+    modfile: Option<&str>,
+    verbose: u8,
+) -> Result<i32> {
+    let timer = tracking::TimedExecution::start();
+    let go_mod = resolve_go_mod(chdir, modfile);
+    let before_text = go_mod
+        .as_deref()
+        .and_then(|p| std::fs::read_to_string(p).ok());
+    let mut cmd = resolved_command("go");
+    cmd.arg("mod").args(args);
+    if verbose > 0 {
+        eprintln!("Running: go mod {}", args.join(" "));
+    }
+    // `run_streaming` relays SIGINT/SIGTERM to `go`, so a killed rtk never leaves tidy writing
+    // go.mod on its own.
+    let captured = stream::run_streaming(&mut cmd, StdinMode::Null, FilterMode::CaptureOnly)
+        .context("Failed to run go mod tidy")?;
+    let raw = format!("{}{}", captured.raw_stdout, captured.raw_stderr);
+    if verbose > 1 {
+        eprintln!("{raw}");
+    }
+    let after_text = go_mod
+        .as_deref()
+        .and_then(|p| std::fs::read_to_string(p).ok());
+    let before = before_text.as_deref().map(parse_requires);
+    let after = after_text.as_deref().map(parse_requires);
+    if before.is_none() || after.is_none() {
+        eprintln!("rtk: go.mod not readable, cannot report what tidy changed");
+    }
+    let mut report = tidy_report(before.as_deref(), after.as_deref(), &raw);
+    if let (Some(old), Some(new)) = (&before_text, &after_text) {
+        report.add_directive_changes(directive_changes(old, new));
+    }
+    let shown = tidy_stdout(&report, &raw, captured.exit_code);
+    if !shown.is_empty() {
+        println!("{shown}");
+    }
+    let kept = report.kept.join("\n");
+    if !kept.is_empty() {
+        eprintln!("{kept}");
+    }
+    let label = format!("go mod {}", args.join(" "));
+    timer.track(
+        &label,
+        &format!("rtk {label}"),
+        &raw,
+        &format!("{shown}{kept}"),
+    );
+    Ok(captured.exit_code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cmds::go::go_run::test_support::{assert_savings, s};
+
+    #[test]
+    fn classifies_mod_subcommands() {
+        assert_eq!(classify(&s(&["graph"])), ModInvocation::Graph);
+        assert_eq!(classify(&s(&["graph", "-go=1.22"])), ModInvocation::Graph);
+        // `graph` takes no arguments: a stray one is Go's error to print.
+        for args in [
+            &["why", "x"][..],
+            &["download"],
+            &[],
+            &["graph", "-help"],
+            &["--help"],
+            &["graph", "extra"],
+        ] {
+            assert_eq!(classify(&s(args)), ModInvocation::Passthrough, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn graph_summarises_direct_requirements_and_version_conflicts() {
+        let raw = "\
+example.com/main a.io/x@v1.0.0
+example.com/main b.io/y@v2.0.0
+a.io/x@v1.0.0 c.io/z@v0.9.0
+a.io/x@v1.0.0 d.io/w@v1.0.0
+c.io/z@v0.9.0 d.io/w@v1.1.0
+b.io/y@v2.0.0 c.io/z@v0.10.0
+";
+        assert_eq!(
+            filter_go_mod_graph(raw),
+            "\
+go mod graph: 7 modules, 6 edges (main example.com/main)
+direct (2):
+  a.io/x@v1.0.0 (+3 transitive)
+  b.io/y@v2.0.0 (+1 transitive)
+multiple versions (2):
+  c.io/z: v0.9.0, v0.10.0
+  d.io/w: v1.0.0, v1.1.0"
+        );
+    }
+
+    #[test]
+    fn graph_caps_sections() {
+        let raw: String = (0..25)
+            .map(|i| format!("example.com/main m{i:02}.io/x@v1.0.0\n"))
+            .collect();
+        let out = filter_go_mod_graph(&raw);
+        assert!(out.contains("direct (25):"), "{out}");
+        assert!(out.contains("  … +5 more"), "{out}");
+        assert!(!out.contains("multiple versions"), "{out}");
+    }
+
+    #[test]
+    fn graph_ignores_go_and_toolchain_version_nodes() {
+        let raw = "\
+example.com/main go@1.25.0
+example.com/main toolchain@go1.25.1
+example.com/main a.io/x@v1.0.0
+a.io/x@v1.0.0 go@1.21
+";
+        assert_eq!(
+            filter_go_mod_graph(raw),
+            "go mod graph: 2 modules, 1 edges (main example.com/main)\ndirect (1):\n  a.io/x@v1.0.0 (+0 transitive)"
+        );
+    }
+
+    #[test]
+    fn graph_without_edges_is_unchanged() {
+        assert_eq!(filter_go_mod_graph(""), "");
+        assert_eq!(filter_go_mod_graph("go: error\n"), "go: error\n");
+    }
+
+    #[test]
+    fn graph_fixture() {
+        let input = include_str!("../../../tests/fixtures/go_mod_graph_raw.txt");
+        let out = filter_go_mod_graph(input);
+        assert_eq!(
+            out,
+            "\
+go mod graph: 204 modules, 405 edges (main google.golang.org/grpc)
+direct (42):
+  google.golang.org/api@v0.293.0 (+85 transitive)
+  cloud.google.com/go/auth@v0.23.1 (+78 transitive)
+  github.com/envoyproxy/go-control-plane/envoy@v1.39.1-0.20260819172001-e6e3fd93e4be (+67 transitive)
+  github.com/envoyproxy/go-control-plane@v0.14.0 (+39 transitive)
+  github.com/google/s2a-go@v0.1.9 (+36 transitive)
+  github.com/googleapis/gax-go/v2@v2.23.0 (+32 transitive)
+  go.opentelemetry.io/contrib/detectors/gcp@v1.45.0 (+30 transitive)
+  go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp@v0.70.0 (+26 transitive)
+  go.opentelemetry.io/otel/sdk/metric@v1.45.0 (+24 transitive)
+  go.opentelemetry.io/otel/sdk@v1.45.0 (+24 transitive)
+  github.com/envoyproxy/go-control-plane/ratelimit@v0.1.0 (+21 transitive)
+  go.opentelemetry.io/otel/metric@v1.45.0 (+18 transitive)
+  go.opentelemetry.io/otel/trace@v1.45.0 (+18 transitive)
+  go.opentelemetry.io/otel@v1.45.0 (+18 transitive)
+  gonum.org/v1/gonum@v0.17.0 (+18 transitive)
+  github.com/spiffe/go-spiffe/v2@v2.8.1 (+15 transitive)
+  github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp@v1.35.0 (+11 transitive)
+  github.com/planetscale/vtprotobuf@v0.6.1-0.20240319094008-0393e58bdf10 (+11 transitive)
+  github.com/cncf/xds/go@v0.0.0-20260202195803-dba9d589def2 (+9 transitive)
+  github.com/envoyproxy/protoc-gen-validate@v1.3.3 (+9 transitive)
+  … +22 more
+multiple versions (40):
+  cel.dev/expr: v0.25.3, v0.25.1, v0.24.0, v0.25.2
+  cloud.google.com/go/auth: v0.23.1, v0.3.0, v0.23.0
+  cloud.google.com/go/compute/metadata: v0.9.0, v0.3.0
+  github.com/cncf/xds/go: v0.0.0-20260202195803-dba9d589def2, v0.0.0-20250501225837-2ac532fd4443, v0.0.0-20240723142845-024c85f92f20
+  github.com/envoyproxy/go-control-plane/envoy: v1.39.1-0.20260819172001-e6e3fd93e4be, v1.36.0, v1.32.2
+  github.com/envoyproxy/protoc-gen-validate: v1.3.3, v1.3.0, v1.2.1, v1.1.0
+  github.com/felixge/httpsnoop: v1.1.0, v1.0.4
+  github.com/go-logr/logr: v1.4.4, v1.4.3, v1.2.2, v1.4.1
+  github.com/golang/protobuf: v1.5.4, v1.5.3, v1.5.0
+  github.com/google/go-cmp: v0.7.0, v0.6.0, v0.5.5
+  github.com/googleapis/enterprise-certificate-proxy: v0.3.21, v0.3.17, v0.3.2, v0.3.20
+  github.com/googleapis/gax-go/v2: v2.23.0, v2.12.3
+  go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp: v0.70.0, v0.67.0, v0.49.0
+  go.opentelemetry.io/otel: v1.45.0, v1.44.0, v1.24.0, v1.38.0
+  go.opentelemetry.io/otel/metric: v1.45.0, v1.44.0, v1.24.0
+  go.opentelemetry.io/otel/sdk: v1.45.0, v1.44.0
+  go.opentelemetry.io/otel/sdk/metric: v1.45.0, v1.44.0
+  go.opentelemetry.io/otel/trace: v1.45.0, v1.44.0, v1.24.0, v1.38.0
+  golang.org/x/crypto: v0.55.0, v0.53.0, v0.31.0, v0.52.0, v0.54.0
+  golang.org/x/net: v0.58.0, v0.56.0, v0.42.0, v0.57.0, v0.28.0, v0.49.0, v0.33.0, v0.14.0, v0.48.0, v0.55.0
+  … +20 more"
+        );
+        assert_savings("go mod graph", input, &out);
+    }
+
+    #[test]
+    fn classifies_tidy() {
+        assert_eq!(
+            classify(&s(&["tidy"])),
+            ModInvocation::Tidy {
+                chdir: None,
+                modfile: None
+            }
+        );
+        assert_eq!(
+            classify(&s(&["tidy", "-modfile=tools/go.mod", "-e"])),
+            ModInvocation::Tidy {
+                chdir: None,
+                modfile: Some("tools/go.mod".into())
+            }
+        );
+        assert_eq!(
+            classify(&s(&["tidy", "-C", "sub", "-modfile", "x.mod"])),
+            ModInvocation::Tidy {
+                chdir: Some("sub".into()),
+                modfile: Some("x.mod".into())
+            }
+        );
+        assert_eq!(classify(&s(&["tidy", "-diff"])), ModInvocation::Passthrough);
+        assert_eq!(classify(&s(&["tidy", "extra"])), ModInvocation::Passthrough);
+    }
+
+    fn req(path: &str, version: &str, indirect: bool) -> Require {
+        Require {
+            path: path.into(),
+            version: version.into(),
+            indirect,
+        }
+    }
+
+    #[test]
+    fn tidy_reports_changes_and_hides_chatter() {
+        let before = [
+            req("a.io/x", "v1.0.0", false),
+            req("b.io/y", "v1.0.0", false),
+            req("c.io/z", "v1.0.0", false),
+        ];
+        let after = [
+            req("a.io/x", "v1.1.0", false),
+            req("c.io/z", "v1.0.0", true),
+            req("d.io/w", "v0.2.0", true),
+        ];
+        let output = "go: downloading a.io/x v1.1.0\ngo: finding module for package d.io/w\ngo: found d.io/w in d.io/w v0.2.0\n";
+        let report = tidy_report(Some(&before[..]), Some(&after[..]), output);
+        assert_eq!(
+            render_tidy(&report, MAX_TIDY_CHANGES),
+            "\
+go mod tidy: +1 added, -1 removed, ~2 changed (1 modules downloaded)
+  + d.io/w v0.2.0
+  - b.io/y v1.0.0
+  ~ a.io/x v1.0.0 → v1.1.0
+  ~ c.io/z v1.0.0 (now indirect)"
+        );
+        // Go's own messages stay on stderr, where Go wrote them.
+        assert_eq!(
+            report.kept.join("\n"),
+            "go: finding module for package d.io/w\ngo: found d.io/w in d.io/w v0.2.0"
+        );
+    }
+
+    #[test]
+    fn tidy_reports_go_and_toolchain_directive_changes() {
+        let before = "module m\n\ngo 1.21\n\nrequire a.io/x v1.0.0\n";
+        let after = "module m\n\ngo 1.22\n\ntoolchain go1.23.1\n\nrequire a.io/x v1.0.0\n";
+        assert_eq!(
+            directive_changes(before, after),
+            vec!["~ go 1.21 → 1.22", "+ toolchain go1.23.1"]
+        );
+        assert!(directive_changes(before, before).is_empty());
+        let mut report = tidy_report(Some(&[][..]), Some(&[][..]), "");
+        report.add_directive_changes(directive_changes(before, after));
+        assert_eq!(
+            render_tidy(&report, MAX_TIDY_CHANGES),
+            "go mod tidy: +0 added, -0 removed, ~2 changed\n  ~ go 1.21 → 1.22\n  + toolchain go1.23.1"
+        );
+    }
+
+    #[test]
+    fn a_failure_hint_is_dropped_when_it_would_outgrow_the_raw_output() {
+        let hint = "[full output: rtk recall 0123456789ab]".to_string();
+        assert_eq!(
+            with_failure_hint(String::new(), Some(hint.clone()), "x"),
+            ""
+        );
+        let raw = "go: errors parsing go.mod: something went wrong on line 3\n".repeat(3);
+        assert_eq!(
+            with_failure_hint(String::new(), Some(hint.clone()), &raw),
+            hint
+        );
+        assert_eq!(with_failure_hint("sum".into(), None, &raw), "sum");
+    }
+
+    #[test]
+    fn overlay_takes_a_value_for_tidy_and_graph() {
+        assert_eq!(
+            classify(&s(&["tidy", "-overlay", "ov.json"])),
+            ModInvocation::Tidy {
+                chdir: None,
+                modfile: None
+            }
+        );
+        assert_eq!(
+            classify(&s(&["graph", "-overlay", "ov.json"])),
+            ModInvocation::Graph
+        );
+    }
+
+    #[test]
+    fn tidy_diff_false_is_filtered() {
+        assert_eq!(
+            classify(&s(&["tidy", "-diff=false"])),
+            ModInvocation::Tidy {
+                chdir: None,
+                modfile: None
+            }
+        );
+    }
+
+    #[test]
+    fn graph_counts_every_workspace_main_module() {
+        let raw = "\
+example.com/a x.io/p@v1.0.0
+example.com/b y.io/q@v1.0.0
+x.io/p@v1.0.0 z.io/r@v1.0.0
+";
+        assert_eq!(
+            filter_go_mod_graph(raw),
+            "\
+go mod graph: 5 modules, 3 edges (main example.com/a +1 workspace module)
+direct (2):
+  x.io/p@v1.0.0 (+1 transitive)
+  y.io/q@v1.0.0 (+0 transitive)"
+        );
+    }
+
+    #[test]
+    fn warm_tidy_without_changes_is_silent() {
+        let mods = [req("a.io/x", "v1.0.0", false)];
+        let report = tidy_report(Some(&mods[..]), Some(&mods[..]), "");
+        assert_eq!(emit_tidy(&report, ""), "");
+    }
+
+    #[test]
+    fn tidy_without_a_readable_go_mod_never_claims_no_changes() {
+        let raw: String = (0..10)
+            .map(|i| format!("go: downloading m{i}.io/x v1.0.0\n"))
+            .collect();
+        let report = tidy_report(None, None, &raw);
+        assert_eq!(
+            emit_tidy(&report, &raw),
+            "go mod tidy: changes unknown, go.mod not readable (10 modules downloaded)"
+        );
+        // Nothing downloaded and nothing known: silent, like go.
+        assert_eq!(emit_tidy(&tidy_report(None, None, ""), ""), "");
+    }
+
+    #[test]
+    fn tidy_diff_may_exceed_the_empty_raw_output() {
+        let before = [req("a.io/x", "v1.0.0", false)];
+        let after = [req("a.io/x", "v1.1.0", false)];
+        let report = tidy_report(Some(&before[..]), Some(&after[..]), "");
+        assert_eq!(
+            emit_tidy(&report, ""),
+            "go mod tidy: +0 added, -0 removed, ~1 changed\n  ~ a.io/x v1.0.0 → v1.1.0"
+        );
+    }
+
+    #[test]
+    fn tidy_caps_changes_and_stores_the_full_list() {
+        let after: Vec<Require> = (0..25)
+            .map(|i| req(&format!("m{i:02}.io/x"), "v1.0.0", false))
+            .collect();
+        let report = tidy_report(Some(&[][..]), Some(after.as_slice()), "");
+        let shown = render_tidy(&report, MAX_TIDY_CHANGES);
+        assert!(shown.ends_with("  … +5 more"), "{shown}");
+        let stored = std::cell::RefCell::new(None);
+        let hint = tidy_tail_hint(&report, |content, offset| {
+            stored.replace(Some((content.to_string(), offset)));
+            Some("[+5 hidden: rtk recall x]".into())
+        });
+        assert_eq!(hint.as_deref(), Some("[+5 hidden: rtk recall x]"));
+        let (content, offset) = stored.into_inner().expect("stored");
+        assert_eq!(offset, 1 + MAX_TIDY_CHANGES + 1);
+        assert_eq!(content.lines().count(), 26);
+        let few = tidy_report(Some(&[][..]), Some(&after[..3]), "");
+        assert!(tidy_tail_hint(&few, |_, _| panic!("no store")).is_none());
+    }
+
+    #[test]
+    fn tidy_fixture_diff() {
+        let before = parse_requires(include_str!(
+            "../../../tests/fixtures/go_mod_tidy_before.mod"
+        ));
+        let after = parse_requires(include_str!(
+            "../../../tests/fixtures/go_mod_tidy_after.mod"
+        ));
+        let report = tidy_report(Some(before.as_slice()), Some(after.as_slice()), "");
+        assert_eq!(
+            render_tidy(&report, MAX_TIDY_CHANGES),
+            "\
+go mod tidy: +1 added, -1 removed, ~1 changed
+  + github.com/google/uuid v1.6.0
+  - github.com/pkg/errors v0.9.1
+  ~ golang.org/x/text v0.3.0 → v0.41.0"
+        );
+    }
+
+    #[test]
+    fn tidy_cold_fixture() {
+        let input = include_str!("../../../tests/fixtures/go_mod_tidy_cold_raw.txt");
+        // A cold cache with an unchanged, readable go.mod.
+        let report = tidy_report(Some(&[][..]), Some(&[][..]), input);
+        let out = emit_tidy(&report, input);
+        assert!(out.starts_with("go mod tidy: no changes ("), "{out}");
+        assert_savings("go mod tidy (cold)", input, &out);
+    }
+}
